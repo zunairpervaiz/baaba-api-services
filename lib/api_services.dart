@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:baaba_api_services/dio_factory.dart';
 import 'package:baaba_api_services/utils/constants.dart';
 import 'package:baaba_api_services/utils/error_handler.dart';
@@ -7,6 +9,7 @@ import 'package:baaba_api_services/utils/http_methods.dart';
 import 'package:baaba_api_services/utils/network_info.dart';
 import 'package:dio/dio.dart';
 import 'package:fpdart/fpdart.dart';
+import 'package:http_parser/http_parser.dart';
 
 /// A class responsible for handling various API services.
 abstract interface class ApiServices {
@@ -136,7 +139,7 @@ abstract interface class ApiServices {
   /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
   Future<Either<Failure, Response>> postMultipart({
     required String endpoint,
-    Object? data,
+    Map<String, dynamic>? data,
     Map<String, dynamic>? params,
     Duration? receiveTimeout,
     Duration? sendTimeout,
@@ -380,83 +383,79 @@ class ApiServicesImplementation implements ApiServices {
     );
   }
 
-  @override
-Future<Either<Failure, Response>> postMultipart({
-  required String endpoint,
-  required Map<String, dynamic> data,
-  Map<String, dynamic>? params,
-  Duration? receiveTimeout,
-  Duration? sendTimeout,
-  Map<String, String>? headers,
-  ProgressCallback? onSendProgress,
-  ProgressCallback? onReceiveProgress,
-  CancelToken? cancelToken,
-}) async {
-  final Map<String, dynamic> formDataMap = {};
+  /// Helper method to convert a File to a Dio MultipartFile with correct MediaType
+  Future<MultipartFile> _mapFileToMultipart(File file) async {
+    String fileName = file.path.split('/').last;
+    String extension = fileName.split('.').last.toLowerCase();
 
-  for (var entry in data.entries) {
-    final value = entry.value;
-
-    if (value == null) {
-      formDataMap[entry.key] = "null";
-    } 
-    // Handle single File
-    else if (value is File) {
-      formDataMap[entry.key] = await _mapFileToMultipart(value);
+    MediaType contentType;
+    if (['mp4', 'mov', 'avi'].contains(extension)) {
+      contentType = MediaType('video', extension);
+    } else {
+      contentType = MediaType('image', extension == 'png' ? 'png' : 'jpeg');
     }
-    // Handle List of Files (including RxList from GetX)
-    else if (value is Iterable) {
-      final List<MultipartFile> multipartFiles = [];
-      for (var item in value) {
-        if (item is File) {
-          multipartFiles.add(await _mapFileToMultipart(item));
-        }
-      }
-      formDataMap[entry.key] = multipartFiles;
-    } 
-    // Regular text fields
-    else {
-      formDataMap[entry.key] = value.toString();
-    }
+
+    return await MultipartFile.fromFile(file.path, filename: fileName, contentType: contentType);
   }
-
-  final formData = FormData.fromMap(formDataMap);
-
-  return await _sendRequest(
-    HttpMethod.post,
-    endpoint: endpoint,
-    data: formData,
-    params: params,
-    receiveTimeout: receiveTimeout,
-    sendTimeout: sendTimeout,
-    headers: headers,
-    onSendProgress: onSendProgress,
-    onReceiveProgress: onReceiveProgress,
-    cancelToken: cancelToken,
-  );
-}
-
-/// Helper method to convert a File to a Dio MultipartFile with correct MediaType
-Future<MultipartFile> _mapFileToMultipart(File file) async {
-  String fileName = file.path.split('/').last;
-  String extension = fileName.split('.').last.toLowerCase();
-  
-  MediaType contentType;
-  if (['mp4', 'mov', 'avi'].contains(extension)) {
-    contentType = MediaType('video', extension);
-  } else {
-    contentType = MediaType('image', extension == 'png' ? 'png' : 'jpeg');
-  }
-
-  return await MultipartFile.fromFile(
-    file.path,
-    filename: fileName,
-    contentType: contentType,
-  );
-}
 
   @override
   void cancelRequest({String cancellationReason = ''}) async {
     _cancelToken?.cancel(cancellationReason); // Provide a cancellation reason
+  }
+
+  @override
+  Future<Either<Failure, Response>> postMultipart({
+    required String endpoint,
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+    CancelToken? cancelToken,
+  }) async {
+    final Map<String, dynamic> formDataMap = {};
+
+    for (var entry in data!.entries) {
+      final value = entry.value;
+
+      if (value == null) {
+        formDataMap[entry.key] = "null";
+      }
+      // Handle single File
+      else if (value is File) {
+        formDataMap[entry.key] = await _mapFileToMultipart(value);
+      }
+      // Handle List of Files (including RxList from GetX)
+      else if (value is Iterable) {
+        final List<MultipartFile> multipartFiles = [];
+        for (var item in value) {
+          if (item is File) {
+            multipartFiles.add(await _mapFileToMultipart(item));
+          }
+        }
+        formDataMap[entry.key] = multipartFiles;
+      }
+      // Regular text fields
+      else {
+        formDataMap[entry.key] = value.toString();
+      }
+    }
+
+    final formData = FormData.fromMap(formDataMap);
+
+    return await _sendRequest(
+      HttpMethod.post,
+      endpoint: endpoint,
+      data: formData,
+      params: params,
+      receiveTimeout: receiveTimeout,
+      sendTimeout: sendTimeout,
+      headers: headers,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+      cancelToken: cancelToken,
+    );
   }
 }
