@@ -134,7 +134,7 @@ abstract interface class ApiServices {
   /// - `headers`: Custom headers for the request (optional).
   ///
   /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
-  Future<Either<Failure, Response>> patch({
+  Future<Either<Failure, Response>> postMultipart({
     required String endpoint,
     Object? data,
     Map<String, dynamic>? params,
