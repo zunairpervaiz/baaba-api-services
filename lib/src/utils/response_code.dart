@@ -1,6 +1,6 @@
 // ignore_for_file: constant_identifier_names
 
-import 'package:baaba_api_services/utils/error_source_extension.dart';
+import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 
 /// Enumeration representing various response codes and corresponding error states.
 enum ResponseCode {
@@ -98,19 +98,19 @@ ResponseCode mapStatusCodeToEnum(int statusCode) {
 }
 
 ErrorSource mapResponseCodeToEnum(ResponseCode code) => switch (code) {
-  ResponseCode.SUCCESS => ErrorSource.success,
-  ResponseCode.NO_CONTENT => ErrorSource.no_content,
-  ResponseCode.BAD_REQUEST => ErrorSource.bad_request,
-  ResponseCode.UNAUTHORIZED => ErrorSource.unauthorised,
-  ResponseCode.FORBIDDEN => ErrorSource.forbidden,
-  ResponseCode.INTERNAL_SERVER_ERROR => ErrorSource.internal_server_error,
-  ResponseCode.NOT_FOUND => ErrorSource.not_found,
-  ResponseCode.CONNECT_TIMEOUT => ErrorSource.connection_timeout,
-  ResponseCode.CANCEL => ErrorSource.cancel,
-  ResponseCode.RECEIVE_TIMEOUT => ErrorSource.receive_timeout,
-  ResponseCode.SEND_TIMEOUT => ErrorSource.send_timeout,
-  ResponseCode.CACHE_ERROR => ErrorSource.cache_error,
-  ResponseCode.NO_INTERNET_CONNECTION => ErrorSource.no_internet_connection,
-  ResponseCode.DEFAULT => ErrorSource.default_error,
-  ResponseCode.CONNECTION_FAILURE => ErrorSource.connection_failure,
-};
+      ResponseCode.SUCCESS => ErrorSource.success,
+      ResponseCode.NO_CONTENT => ErrorSource.no_content,
+      ResponseCode.BAD_REQUEST => ErrorSource.bad_request,
+      ResponseCode.UNAUTHORIZED => ErrorSource.unauthorised,
+      ResponseCode.FORBIDDEN => ErrorSource.forbidden,
+      ResponseCode.INTERNAL_SERVER_ERROR => ErrorSource.internal_server_error,
+      ResponseCode.NOT_FOUND => ErrorSource.not_found,
+      ResponseCode.CONNECT_TIMEOUT => ErrorSource.connection_timeout,
+      ResponseCode.CANCEL => ErrorSource.cancel,
+      ResponseCode.RECEIVE_TIMEOUT => ErrorSource.receive_timeout,
+      ResponseCode.SEND_TIMEOUT => ErrorSource.send_timeout,
+      ResponseCode.CACHE_ERROR => ErrorSource.cache_error,
+      ResponseCode.NO_INTERNET_CONNECTION => ErrorSource.no_internet_connection,
+      ResponseCode.DEFAULT => ErrorSource.default_error,
+      ResponseCode.CONNECTION_FAILURE => ErrorSource.connection_failure,
+    };

@@ -1,5 +1,5 @@
-import 'package:baaba_api_services/utils/error_source_extension.dart';
-import 'package:baaba_api_services/utils/response_code.dart';
+import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
+import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:equatable/equatable.dart';
 
 /// A class for handling [Exception] in [ApiServices].

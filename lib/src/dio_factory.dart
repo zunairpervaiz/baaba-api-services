@@ -20,16 +20,14 @@ class DioFactory {
 
     // Add PrettyDioLogger interceptor for debugging in non-release mode
     if (!kReleaseMode) {
-      dio.interceptors.add(
-        PrettyDioLogger(
-          requestHeader: false, // Do not log request headers
-          responseHeader: false, // Do not log response headers
-          request: false, // Do not log request information
-          requestBody: true, // Log request body
-          responseBody: true, // Log response body
-          error: true, // Log errors
-        ),
-      );
+      dio.interceptors.add(PrettyDioLogger(
+        requestHeader: false, // Do not log request headers
+        responseHeader: false, // Do not log response headers
+        request: false, // Do not log request information
+        requestBody: true, // Log request body
+        responseBody: true, // Log response body
+        error: true, // Log errors
+      ));
     }
 
     // Return the configured Dio instance

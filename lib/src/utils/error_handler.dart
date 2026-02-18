@@ -1,9 +1,9 @@
-import 'package:baaba_api_services/utils/error_source_extension.dart';
-import 'package:baaba_api_services/utils/failure.dart';
-import 'package:baaba_api_services/utils/response_code.dart';
+import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
+import 'package:baaba_api_handler/src/utils/failure.dart';
+import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:dio/dio.dart';
 
-import './constants.dart';
+import 'constants.dart';
 
 class ErrorHandler implements Exception {
   // Represents the failure object associated with the error.

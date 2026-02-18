@@ -1,8 +1,8 @@
 // ignore_for_file: constant_identifier_names
 
-import 'package:baaba_api_services/utils/failure.dart';
-import 'package:baaba_api_services/utils/response_code.dart';
-import 'package:baaba_api_services/utils/response_messages.dart';
+import 'package:baaba_api_handler/src/utils/failure.dart';
+import 'package:baaba_api_handler/src/utils/response_code.dart';
+import 'package:baaba_api_handler/src/utils/response_messages.dart';
 
 /// Enumeration representing different data sources or error types.
 enum ErrorSource {
@@ -20,7 +20,7 @@ enum ErrorSource {
   cache_error,
   no_internet_connection,
   connection_failure,
-  default_error,
+  default_error
 }
 
 /// Extension on [ErrorSource] providing a method to convert each data source into a Failure object.

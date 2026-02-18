@@ -1,18 +1,23 @@
-import 'dart:io';
-
-import 'package:baaba_api_services/dio_factory.dart';
-import 'package:baaba_api_services/utils/constants.dart';
-import 'package:baaba_api_services/utils/error_handler.dart';
-import 'package:baaba_api_services/utils/error_source_extension.dart';
-import 'package:baaba_api_services/utils/failure.dart';
-import 'package:baaba_api_services/utils/http_methods.dart';
-import 'package:baaba_api_services/utils/network_info.dart';
+import 'package:baaba_api_handler/src/dio_factory.dart';
+import 'package:baaba_api_handler/src/utils/constants.dart';
+import 'package:baaba_api_handler/src/utils/error_handler.dart';
+import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
+import 'package:baaba_api_handler/src/utils/failure.dart';
+import 'package:baaba_api_handler/src/utils/http_methods.dart';
+import 'package:baaba_api_handler/src/utils/network_info.dart';
 import 'package:dio/dio.dart';
 import 'package:fpdart/fpdart.dart';
-import 'package:http_parser/http_parser.dart';
 
 /// A class responsible for handling various API services.
 abstract interface class ApiServices {
+  static ApiServices? _apiServices;
+
+  /// [ApiServices] provides API communication functionalities.
+  static ApiServices instance([Dio? dio]) {
+    _apiServices ??= ApiServicesImplementation.instance(dio);
+    return _apiServices!;
+  }
+
   /// Sends a GET request to the specified [endpoint].
   ///
   /// Parameters:
@@ -127,28 +132,6 @@ abstract interface class ApiServices {
     CancelToken? cancelToken,
   });
 
-  /// Sends a MULTIPART request to the specified [endpoint].
-  ///
-  /// Parameters:
-  ///
-  /// - `endPoint`: URL endpoint of the API.
-  /// - `receiveTimeout`: Duration for the receive timeout (optional).
-  /// - `sendTimeout`: Duration for the send timeout (optional).
-  /// - `headers`: Custom headers for the request (optional).
-  ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
-  Future<Either<Failure, Response>> postMultipart({
-    required String endpoint,
-    Map<String, dynamic>? data,
-    Map<String, dynamic>? params,
-    Duration? receiveTimeout,
-    Duration? sendTimeout,
-    Map<String, String>? headers,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-    CancelToken? cancelToken,
-  });
-
   /// Method to cancel the ongoing request.
   ///
   /// [cancellationReason]: Optional parameter specifying the reason for cancellation.
@@ -160,7 +143,11 @@ class ApiServicesImplementation implements ApiServices {
   final NetworkInfo _networkInfo = NetworkInfo(); // Network information utility
 
   // Default headers for HTTP requests
-  final Map<String, String> _defaultHeader = {contentType: applicationJson, accept: applicationJson, authorization: token};
+  final Map<String, String> _defaultHeader = {
+    contentType: applicationJson,
+    accept: applicationJson,
+    authorization: token,
+  };
 
   // Define a CancelToken instance
   CancelToken? _cancelToken;
@@ -182,7 +169,9 @@ class ApiServicesImplementation implements ApiServices {
   /// This is a private constructor for the ApiServices class.
   /// It accepts a required Dio instance and an optional CancelToken instance as parameters.
   /// It initializes the _dio and _cancelToken fields with the provided parameters.
-  ApiServicesImplementation._({required Dio dio, CancelToken? cancelToken}) : _dio = dio, _cancelToken = cancelToken;
+  ApiServicesImplementation._({required Dio dio, CancelToken? cancelToken})
+      : _dio = dio,
+        _cancelToken = cancelToken;
 
   /// This factory method creates an instance of ApiServices using the provided Dio and optional CancelToken instances.
   /// It calls the private constructor to create the new instance.
@@ -383,79 +372,8 @@ class ApiServicesImplementation implements ApiServices {
     );
   }
 
-  /// Helper method to convert a File to a Dio MultipartFile with correct MediaType
-  Future<MultipartFile> _mapFileToMultipart(File file) async {
-    String fileName = file.path.split('/').last;
-    String extension = fileName.split('.').last.toLowerCase();
-
-    MediaType contentType;
-    if (['mp4', 'mov', 'avi'].contains(extension)) {
-      contentType = MediaType('video', extension);
-    } else {
-      contentType = MediaType('image', extension == 'png' ? 'png' : 'jpeg');
-    }
-
-    return await MultipartFile.fromFile(file.path, filename: fileName, contentType: contentType);
-  }
-
   @override
   void cancelRequest({String cancellationReason = ''}) async {
     _cancelToken?.cancel(cancellationReason); // Provide a cancellation reason
-  }
-
-  @override
-  Future<Either<Failure, Response>> postMultipart({
-    required String endpoint,
-    Map<String, dynamic>? data,
-    Map<String, dynamic>? params,
-    Duration? receiveTimeout,
-    Duration? sendTimeout,
-    Map<String, String>? headers,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-    CancelToken? cancelToken,
-  }) async {
-    final Map<String, dynamic> formDataMap = {};
-
-    for (var entry in data!.entries) {
-      final value = entry.value;
-
-      if (value == null) {
-        formDataMap[entry.key] = "null";
-      }
-      // Handle single File
-      else if (value is File) {
-        formDataMap[entry.key] = await _mapFileToMultipart(value);
-      }
-      // Handle List of Files (including RxList from GetX)
-      else if (value is Iterable) {
-        final List<MultipartFile> multipartFiles = [];
-        for (var item in value) {
-          if (item is File) {
-            multipartFiles.add(await _mapFileToMultipart(item));
-          }
-        }
-        formDataMap[entry.key] = multipartFiles;
-      }
-      // Regular text fields
-      else {
-        formDataMap[entry.key] = value.toString();
-      }
-    }
-
-    final formData = FormData.fromMap(formDataMap);
-
-    return await _sendRequest(
-      HttpMethod.post,
-      endpoint: endpoint,
-      data: formData,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-    );
   }
 }
