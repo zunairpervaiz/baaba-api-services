@@ -1,6 +1,6 @@
 name: baaba_api_handler
 description: "API handling services"
-version: 1.0.1
+version: 1.0.4
 
 environment:
   sdk: ">=3.3.1 <4.0.0"

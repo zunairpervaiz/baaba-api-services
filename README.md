@@ -11,11 +11,11 @@ Follow these steps to install and integrate API Services into your Flutter proje
 
 #### 1. Add Dependency
 
-Add TS Essentials to your `pubspec.yaml` file under the `dependencies` section:
+Add it to your `pubspec.yaml` file under the `dependencies` section:
 
 ```yaml
 dependencies:
-  baaba_api_services: ^1.0.1
+  baaba_api_handler: ^1.0.2
 ```
 
 | Property | Type   | Description                                         |
@@ -44,7 +44,7 @@ import 'package:baaba_api_handler/ts_api_handler.dart';
 
 ### 1. Network APIs Handler
 
-TS Essential provides network API handling utilities to simplify communication with external APIs and services. With TS Essential's API handling methods, you can easily make HTTP requests, handle responses, and manage network interactions in your flutter project.
+Baaba API Handler provides network API handling utilities to simplify communication with external APIs and services. With Baaba API handling methods, you can easily make HTTP requests, handle responses, and manage network interactions in your flutter project.
 
 Once imported, create an object of ApiServices and ApiCacheHelper into your dart code to access its features and functionalities:
 
@@ -57,7 +57,7 @@ Each method within the API handler contains the following properties for configu
 | Property       | Type                | Required | Description                                                                                                  | Example                                  |
 | -------------- | ------------------- | -------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
 | endpoint       | String              | Yes      | The URL of the endpoint where the API request will be sent.                                                  | https://example.com                      |
-| data           | Object              | No       | The data object to be sent with the request.                                                                 | `{ "name": "TS Essentials" }`            |
+| data           | Object              | No       | The data object to be sent with the request.                                                                 | `{ "name": "Baaba Devs" }`            |
 | headers        | Object              | No       | The headers to be included in the request.                                                                   | `{ "content-type": "application/json" }` |
 | params         | Map<String,dynamic> | No       | The parameters to be included in the request.                                                                | `{ "code": 123 }`                        |
 | receiveTimeout | Duration            | No       | The timeout duration for receiving a response from the server which can be in seconds, minutes or hours etc. | Duration(seconds:30)                     |
@@ -137,7 +137,7 @@ apiServices.cancelRequest();
 
 ### 2. API Cache Management
 
-TS Essentials provides the functionality of caching the API response into local database for reducing unnecessary API calls and making the app offline first. To access these functionalities in your flutter app:
+Baaba API Handler provides the functionality of caching the API response into local database for reducing unnecessary API calls and making the app offline first. To access these functionalities in your flutter app:
 
 ```dart
 ApiCacheHelper apiCacheHelper = ApiCacheHelper.instance;
