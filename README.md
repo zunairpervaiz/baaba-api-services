@@ -15,11 +15,7 @@ Add TS Essentials to your `pubspec.yaml` file under the `dependencies` section:
 
 ```yaml
 dependencies:
-  ts_api_handler:
-    git:
-      url: https://github.com/Technosoft-Solutions/ts-essentials-flutter.git
-      ref: develop
-      path: packages/api_handler
+  baaba_api_services: ^1.0.1
 ```
 
 | Property | Type   | Description                                         |
