@@ -19,5 +19,6 @@ class ResponseMessage {
   static const String CACHE_ERROR = ResponseStrings.strCacheError;
   static const String NO_INTERNET_CONNECTION = ResponseStrings.strNoInternetError;
   static const String CONNECTION_FAILURE = ResponseStrings.strConnectionFailureError;
+  static const String SERVICE_NOT_AVAILABLE = ResponseStrings.strServiceNotAvailableError;
   static const String DEFAULT = ResponseStrings.strDefaultError;
 }

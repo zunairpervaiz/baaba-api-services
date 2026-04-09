@@ -20,6 +20,7 @@ enum ErrorSource {
   cache_error,
   no_internet_connection,
   connection_failure,
+  service_not_available,
   default_error
 }
 
@@ -58,6 +59,8 @@ extension ErrorSourceExtension on ErrorSource {
         return Failure(this, ResponseCode.NO_INTERNET_CONNECTION, ResponseMessage.NO_INTERNET_CONNECTION);
       case ErrorSource.connection_failure:
         return Failure(this, ResponseCode.CONNECTION_FAILURE, ResponseMessage.CONNECTION_FAILURE);
+      case ErrorSource.service_not_available:
+        return Failure(this, ResponseCode.SERVICE_NOT_AVAILABLE, ResponseMessage.SERVICE_NOT_AVAILABLE);
       case ErrorSource.default_error:
         return Failure(this, ResponseCode.DEFAULT, ResponseMessage.DEFAULT);
     }

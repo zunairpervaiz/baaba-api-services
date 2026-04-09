@@ -17,4 +17,5 @@ class ResponseStrings {
   static const String strCacheError = "cache_error";
   static const String strNoInternetError = "no_internet_error";
   static const String strConnectionFailureError = "connection_failure_error";
+  static const String strServiceNotAvailableError = "service_not_available_error";
 }

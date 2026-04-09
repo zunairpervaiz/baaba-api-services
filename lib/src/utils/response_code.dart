@@ -17,6 +17,7 @@ enum ResponseCode {
   SEND_TIMEOUT,
   CACHE_ERROR,
   NO_INTERNET_CONNECTION,
+  SERVICE_NOT_AVAILABLE,
   DEFAULT,
   CONNECTION_FAILURE,
 }
@@ -37,6 +38,8 @@ extension ResponseCodeExtension on ResponseCode {
         return 403;
       case ResponseCode.INTERNAL_SERVER_ERROR:
         return 500;
+      case ResponseCode.SERVICE_NOT_AVAILABLE:
+        return 503;
       case ResponseCode.NOT_FOUND:
         return 404;
       case ResponseCode.CONNECT_TIMEOUT:
@@ -76,6 +79,8 @@ ResponseCode mapStatusCodeToEnum(int statusCode) {
       return ResponseCode.NOT_FOUND;
     case 500:
       return ResponseCode.INTERNAL_SERVER_ERROR;
+    case 503:
+      return ResponseCode.SERVICE_NOT_AVAILABLE;
     case -1:
       return ResponseCode.CONNECT_TIMEOUT;
     case -2:
@@ -92,6 +97,7 @@ ResponseCode mapStatusCodeToEnum(int statusCode) {
       return ResponseCode.DEFAULT;
     case -8:
       return ResponseCode.CONNECTION_FAILURE;
+
     default:
       return ResponseCode.DEFAULT;
   }
@@ -111,6 +117,7 @@ ErrorSource mapResponseCodeToEnum(ResponseCode code) => switch (code) {
       ResponseCode.SEND_TIMEOUT => ErrorSource.send_timeout,
       ResponseCode.CACHE_ERROR => ErrorSource.cache_error,
       ResponseCode.NO_INTERNET_CONNECTION => ErrorSource.no_internet_connection,
+      ResponseCode.SERVICE_NOT_AVAILABLE => ErrorSource.service_not_available,
       ResponseCode.DEFAULT => ErrorSource.default_error,
       ResponseCode.CONNECTION_FAILURE => ErrorSource.connection_failure,
     };
