@@ -1,0 +1,28 @@
+# Dart / Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock
+
+# Build outputs
+build/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+
+# Coverage
+coverage/
+
+# Generated files
+*.g.dart
+*.freezed.dart
+
+# Pub cache
+.pub-cache/
+.pub/
