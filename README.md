@@ -1,202 +1,271 @@
-# Table of Contents
+# baaba_api_handler
+
+A Flutter package for HTTP API communication and response caching. Wraps [Dio](https://pub.dev/packages/dio) with structured error handling, automatic token refresh, network retry, and local cache management.
+
+## Table of Contents
 
 - [Installation](#installation)
 - [Features](#features)
-  - [Network APIs Handler](#1-network-apis-handler)
+  - [Network API Handler](#1-network-api-handler)
+    - [Configuration (Token Auth)](#11-configuration-token-auth)
+    - [GET](#12-get)
+    - [POST](#13-post)
+    - [PUT](#14-put)
+    - [PATCH](#15-patch)
+    - [DELETE](#16-delete)
+    - [Cancel Request](#17-cancel-request)
   - [API Cache Management](#2-api-cache-management)
+    - [Get Cache](#21-get-cache)
+    - [Set Cache](#22-set-cache)
+    - [Clear Cache](#23-clear-cache)
+    - [Cache Exists](#24-cache-exists)
+    - [Clear All Cache](#25-clear-all-cache)
+
+---
 
 ## Installation
 
-Follow these steps to install and integrate API Services into your Flutter project:
-
 #### 1. Add Dependency
 
-Add it to your `pubspec.yaml` file under the `dependencies` section:
+Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^1.0.2
+  baaba_api_handler: ^1.0.7
 ```
 
-| Property | Type   | Description                                         |
-| -------- | ------ | --------------------------------------------------- |
-| url      | String | URL of the Git repository.                          |
-| ref      | String | Branch reference to be fetched from the repository. |
-| path     | String | Path of the required package.                       |
-
 #### 2. Install Packages
-
-Run the following command in your terminal to install the dependencies:
 
 ```bash
 flutter pub get
 ```
 
-#### 3. Import the library
-
-Import in your Dart code:
+#### 3. Import the Library
 
 ```dart
 import 'package:baaba_api_handler/ts_api_handler.dart';
 ```
 
+> `Response`, `CancelToken` (Dio), and `APICacheDBModel` are re-exported from this single import — no need to add `dio` or `api_cache_manager` as direct dependencies.
+
+---
+
 ## Features
 
-### 1. Network APIs Handler
+### 1. Network API Handler
 
-Baaba API Handler provides network API handling utilities to simplify communication with external APIs and services. With Baaba API handling methods, you can easily make HTTP requests, handle responses, and manage network interactions in your flutter project.
+Provides typed HTTP methods with built-in network checks, automatic token refresh, network retry, and structured error responses.
 
-Once imported, create an object of ApiServices and ApiCacheHelper into your dart code to access its features and functionalities:
+Create a singleton instance:
 
 ```dart
-ApiServices apiServices =  ApiServices.intance();
+final apiServices = ApiServices.instance();
 ```
 
-Each method within the API handler contains the following properties for configuration:
+#### Request Parameters
 
-| Property       | Type                | Required | Description                                                                                                  | Example                                  |
-| -------------- | ------------------- | -------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| endpoint       | String              | Yes      | The URL of the endpoint where the API request will be sent.                                                  | https://example.com                      |
-| data           | Object              | No       | The data object to be sent with the request.                                                                 | `{ "name": "Baaba Devs" }`            |
-| headers        | Object              | No       | The headers to be included in the request.                                                                   | `{ "content-type": "application/json" }` |
-| params         | Map<String,dynamic> | No       | The parameters to be included in the request.                                                                | `{ "code": 123 }`                        |
-| receiveTimeout | Duration            | No       | The timeout duration for receiving a response from the server which can be in seconds, minutes or hours etc. | Duration(seconds:30)                     |
-| sendTimeout    | Duration            | No       | The timeout duration for sending the request to the server which can be in seconds, minutes or hours etc.    | Duration(seconds:30)                     |
+All HTTP methods share these parameters:
 
-#### 4.1 GET
+| Parameter          | Type                | Required | Description                                            |
+| ------------------ | ------------------- | -------- | ------------------------------------------------------ |
+| `endpoint`         | `String`            | Yes      | Full URL of the API endpoint.                          |
+| `data`             | `Object?`           | No       | Request body.                                          |
+| `params`           | `Map<String, dynamic>?` | No   | Query parameters.                                      |
+| `headers`          | `Map<String, String>?`  | No   | Custom headers. Defaults to `application/json`.        |
+| `receiveTimeout`   | `Duration?`         | No       | Timeout for receiving a response.                      |
+| `sendTimeout`      | `Duration?`         | No       | Timeout for sending the request.                       |
+| `cancelToken`      | `CancelToken?`      | No       | Token to cancel this specific request.                 |
+| `onSendProgress`   | `ProgressCallback?` | No       | Upload progress callback.                              |
+| `onReceiveProgress`| `ProgressCallback?` | No       | Download progress callback.                            |
 
-You can use the following example to make GET request.
-
-```dart
-// Make a GET request
-Either<Failure, Response<dynamic>> response =  await apiServices.get(endpoint: endpoint);
-```
-
-#### 4.2 POST
-
-You can use the following example to make POST request.
+All methods return `Either<Failure, Response>`:
 
 ```dart
-// Make a POST request
-Either<Failure, Response<dynamic>> response =  await apiServices.post(endpoint: endpoint)
-```
-
-#### 4.3 PUT
-
-You can use the following example to make PUT request.
-
-```dart
-// Make a PUT request
-Either<Failure, Response<dynamic>> response =  await apiServices.put(endpoint: endpoint);
-```
-
-#### 4.4 PATCH
-
-You can use the following example to make PATCH request.
-
-```dart
-// Make a PATCH request
-Either<Failure, Response<dynamic>> response =  await apiServices.patch(endpoint: endpoint);
-```
-
-#### 4.5 DELETE
-
-You can use the following example to make DELETE request.
-
-```dart
-// Make a DELETE request
-Either<Failure, Response<dynamic>> response =  await apiServices.delete(endpoint: endpoint);
-```
-
-`GET`, `POST`, `PATCH`, `PUT` and `DELETE` methods returns the response as `Either<Failure, Response<dynamic>>` which you can handle as demonstrated below:
-
-```dart
-// Handle the response
 response.fold(
-  (failure) =>  print(failure.toString()),  // Log the failure
-  (success) =>  print(success.data),  // Log the response data
+  (failure) => print('Error ${failure.message}'),
+  (success) => print(success.data),
 );
 ```
 
-| Property | Type     | Description                                                                                                            |     |
-| -------- | -------- | ---------------------------------------------------------------------------------------------------------------------- | --- |
-| failure  | Failure  | Represents a failure response from an HTTP request, encapsulating error details such as status code and error message. |
-| success  | Response | Represents a successful response from an HTTP request, containing the data and metadata returned by the server.        |
+| Type      | Description                                                      |
+| --------- | ---------------------------------------------------------------- |
+| `Failure` | Contains `errorSource`, `responseCode`, and `message`.          |
+| `Response`| Dio response with `data`, `statusCode`, and `headers`.          |
 
-#### 4.6 CANCEL
+---
 
-You can cancel the most recent API request by using the following method:
+#### 1.1 Configuration (Token Auth)
+
+Call `ApiServices.configure()` once at app startup to enable automatic token injection and refresh on 401 responses:
+
+```dart
+ApiServices.configure(
+  getToken: () async => await storage.read(key: 'access_token'),
+  onTokenRefresh: () async {
+    // Perform your refresh logic here.
+    // Return true if the token was refreshed successfully.
+    return await authRepository.refresh();
+  },
+  onRefreshFailed: () {
+    // Called when refresh fails — typically trigger logout.
+    authController.logout();
+  },
+);
+```
+
+| Parameter        | Type                                    | Required | Description                                                                          |
+| ---------------- | --------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
+| `getToken`       | `Future<String?> Function()`            | Yes      | Returns the current token. Called before every outgoing request.                     |
+| `onTokenRefresh` | `Future<bool> Function()`               | Yes      | Performs the token refresh. Returns `true` on success.                               |
+| `onRefreshFailed`| `void Function()?`                      | No       | Called when refresh fails (e.g. to trigger logout).                                  |
+| `headerBuilder`  | `Map<String, String> Function(String)?` | No       | Builds auth headers from the token. Defaults to `Authorization: Bearer <token>`.     |
+
+> If you do not need token auth, skip this and call `ApiServices.instance()` directly.
+
+#### Custom Headers with `headerBuilder`
+
+By default the token is injected as `Authorization: Bearer <token>`. Use `headerBuilder` when you need a different scheme or additional headers:
+
+```dart
+// Different auth scheme
+ApiServices.configure(
+  getToken: () async => await storage.read(key: 'token'),
+  onTokenRefresh: () async => await authRepo.refresh(),
+  headerBuilder: (token) => {
+    'Authorization': 'Token $token',
+  },
+);
+```
+
+```dart
+// Multiple fields — token + tenant ID + API key
+ApiServices.configure(
+  getToken: () async => await storage.read(key: 'token'),
+  onTokenRefresh: () async => await authRepo.refresh(),
+  headerBuilder: (token) => {
+    'Authorization': 'Bearer $token',
+    'X-Tenant-Id': 'my-org',
+    'X-Api-Key': 'abc123',
+  },
+);
+```
+
+The returned map is merged into every request's headers, including automatic retries after a token refresh.
+
+---
+
+#### 1.2 GET
+
+```dart
+final response = await apiServices.get(endpoint: 'https://api.example.com/users');
+```
+
+#### 1.3 POST
+
+```dart
+final response = await apiServices.post(
+  endpoint: 'https://api.example.com/users',
+  data: {'name': 'Baaba'},
+);
+```
+
+#### 1.4 PUT
+
+```dart
+final response = await apiServices.put(
+  endpoint: 'https://api.example.com/users/1',
+  data: {'name': 'Baaba Updated'},
+);
+```
+
+#### 1.5 PATCH
+
+```dart
+final response = await apiServices.patch(
+  endpoint: 'https://api.example.com/users/1',
+  data: {'name': 'Baaba Patched'},
+);
+```
+
+#### 1.6 DELETE
+
+```dart
+final response = await apiServices.delete(endpoint: 'https://api.example.com/users/1');
+```
+
+#### 1.7 Cancel Request
+
+Cancel the most recent in-flight request:
 
 ```dart
 apiServices.cancelRequest();
+
+// With an optional reason:
+apiServices.cancelRequest(cancellationReason: 'User navigated away');
 ```
 
-| Property           | Type   | Required | Description                                                                            |
-| ------------------ | ------ | -------- | -------------------------------------------------------------------------------------- |
-| cancellationReason | String | No       | This field is typically used to provide context or details for the cancellation event. |
+To cancel a specific request, pass a `CancelToken` when making the call:
+
+```dart
+final token = CancelToken();
+final response = await apiServices.get(endpoint: url, cancelToken: token);
+
+// Later:
+token.cancel('Cancelled by user');
+```
+
+---
 
 ### 2. API Cache Management
 
-Baaba API Handler provides the functionality of caching the API response into local database for reducing unnecessary API calls and making the app offline first. To access these functionalities in your flutter app:
+Caches API responses in a local SQLite database to reduce unnecessary network calls and support offline-first behaviour.
 
 ```dart
-ApiCacheHelper apiCacheHelper = ApiCacheHelper.instance;
+final apiCacheHelper = ApiCacheHelper.instance;
 ```
 
-All the methods provided for caching of response are as follows:
-
-#### 5.1 GET
-
-This method gets the cached api response into the local database with the provided url.
+#### 2.1 Get Cache
 
 ```dart
-APICacheDBModel? response =  await apiCacheHelper.getCacheData(url);
+final cached = await apiCacheHelper.getCacheData(url);
 ```
 
-| Property | Type   | Required | Description                                            |
-| -------- | ------ | -------- | ------------------------------------------------------ |
-| url      | String | Yes      | The URL of the HTTP request stored in to the database. |
+| Parameter | Type     | Required | Description                              |
+| --------- | -------- | -------- | ---------------------------------------- |
+| `url`     | `String` | Yes      | The URL whose cached response to fetch.  |
 
-#### 5.2 SET
-
-This method sets the api response into the local database with the provided url and data.
+#### 2.2 Set Cache
 
 ```dart
-bool isStored =  await apiCacheHelper.setCacheData(url, data);
+final stored = await apiCacheHelper.setCacheData(url, data);
 ```
 
-| Property | Type   | Required | Description                                             |
-| -------- | ------ | -------- | ------------------------------------------------------- |
-| url      | String | Yes      | The URL of the HTTP request to be stored into database. |
-| data     | String | Yes      | The data to be cached e.g API response.                 |
+| Parameter | Type     | Required | Description                          |
+| --------- | -------- | -------- | ------------------------------------ |
+| `url`     | `String` | Yes      | The URL to associate with the cache. |
+| `data`    | `String` | Yes      | The response data to cache.          |
 
-#### 5.3 CLEAR
-
-This method removes the api response from the local database for the provided url.
+#### 2.3 Clear Cache
 
 ```dart
-bool isCleared =  await apiCacheHelper.clearCache(url);
+final cleared = await apiCacheHelper.clearCache(url);
 ```
 
-| Property | Type   | Required | Description                                             |
-| -------- | ------ | -------- | ------------------------------------------------------- |
-| url      | String | Yes      | The URL of the HTTP request to clear from the database. |
+| Parameter | Type     | Required | Description                            |
+| --------- | -------- | -------- | -------------------------------------- |
+| `url`     | `String` | Yes      | The URL whose cache entry to remove.   |
 
-#### 5.4 EXISTS
-
-This method checks if the cached response for the provided url is available in the local database.
+#### 2.4 Cache Exists
 
 ```dart
-bool exists =  await apiCacheHelper.isCacheExist(url);
+final exists = await apiCacheHelper.isCacheExist(url);
 ```
 
-| Property | Type   | Required | Description                                           |
-| -------- | ------ | -------- | ----------------------------------------------------- |
-| url      | String | Yes      | The URL of the HTTP request stored into the database. |
+| Parameter | Type     | Required | Description                               |
+| --------- | -------- | -------- | ----------------------------------------- |
+| `url`     | `String` | Yes      | The URL to check for a cached response.   |
 
-#### 5.5 CLEAR ALL
-
-This method removes all the cached api response from the local database.
+#### 2.5 Clear All Cache
 
 ```dart
 await apiCacheHelper.clearAllCache();

@@ -1,3 +1,4 @@
+import 'package:baaba_api_handler/src/interceptors/network_retry_interceptor.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
@@ -18,12 +19,14 @@ class DioFactory {
       sendTimeout: sendTimeout, // Set send timeout
     );
 
+    dio.interceptors.add(NetworkRetryInterceptor(dio: dio)); // Add custom network retry interceptor
+
     // Add PrettyDioLogger interceptor for debugging in non-release mode
     if (!kReleaseMode) {
       dio.interceptors.add(PrettyDioLogger(
         requestHeader: false, // Do not log request headers
         responseHeader: false, // Do not log response headers
-        request: false, // Do not log request information
+        request: true, // log request information
         requestBody: true, // Log request body
         responseBody: true, // Log response body
         error: true, // Log errors

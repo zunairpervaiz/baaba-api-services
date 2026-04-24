@@ -1,4 +1,5 @@
 import 'package:baaba_api_handler/src/dio_factory.dart';
+import 'package:baaba_api_handler/src/interceptors/token_refresh_interceptor.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
@@ -16,6 +17,31 @@ abstract interface class ApiServices {
   static ApiServices instance([Dio? dio]) {
     _apiServices ??= ApiServicesImplementation.instance(dio);
     return _apiServices!;
+  }
+
+  /// Configures [ApiServices] with token-based authentication and automatic
+  /// token refresh on 401 responses.
+  ///
+  /// Call this once at app startup before using [instance].
+  ///
+  /// - [getToken]: returns the current bearer token.
+  /// - [onTokenRefresh]: performs the refresh and returns true on success.
+  /// - [onRefreshFailed]: called when refresh fails (e.g. to trigger logout).
+  /// - [headerBuilder]: optional — builds the auth headers from the token.
+  ///   Defaults to `{'Authorization': 'Bearer <token>'}` when omitted.
+  static void configure({
+    required Future<String?> Function() getToken,
+    required Future<bool> Function() onTokenRefresh,
+    void Function()? onRefreshFailed,
+    Map<String, String> Function(String token)? headerBuilder,
+  }) {
+    _apiServices = null;
+    ApiServicesImplementation._configure(
+      getToken: getToken,
+      onTokenRefresh: onTokenRefresh,
+      onRefreshFailed: onRefreshFailed,
+      headerBuilder: headerBuilder,
+    );
   }
 
   /// Sends a GET request to the specified [endpoint].
@@ -146,7 +172,6 @@ class ApiServicesImplementation implements ApiServices {
   final Map<String, String> _defaultHeader = {
     contentType: applicationJson,
     accept: applicationJson,
-    authorization: token,
   };
 
   // Define a CancelToken instance
@@ -163,6 +188,24 @@ class ApiServicesImplementation implements ApiServices {
   static ApiServices instance([Dio? dio]) {
     _instance ??= ApiServicesImplementation.instanceFor(dio: dio ?? DioFactory().getDio());
     return _instance!;
+  }
+
+  static void _configure({
+    required Future<String?> Function() getToken,
+    required Future<bool> Function() onTokenRefresh,
+    void Function()? onRefreshFailed,
+    Map<String, String> Function(String token)? headerBuilder,
+  }) {
+    _instance = null;
+    final dio = DioFactory().getDio();
+    dio.interceptors.add(TokenRefreshInterceptor(
+      dio: dio,
+      getToken: getToken,
+      onTokenRefresh: onTokenRefresh,
+      onRefreshFailed: onRefreshFailed,
+      headerBuilder: headerBuilder,
+    ));
+    _instance = ApiServicesImplementation.instanceFor(dio: dio);
   }
   //coverage:ignore-end
 
@@ -204,7 +247,7 @@ class ApiServicesImplementation implements ApiServices {
     CancelToken? cancelToken,
   }) async {
     // Check if the device is connected to the internet
-    final isConnected = await _networkInfo.isConnected ?? false;
+    final isConnected = await _networkInfo.isConnected;
     if (isConnected) {
       try {
         _cancelToken = cancelToken ?? CancelToken();
@@ -373,7 +416,7 @@ class ApiServicesImplementation implements ApiServices {
   }
 
   @override
-  void cancelRequest({String cancellationReason = ''}) async {
+  void cancelRequest({String cancellationReason = ''}) {
     _cancelToken?.cancel(cancellationReason); // Provide a cancellation reason
   }
 }

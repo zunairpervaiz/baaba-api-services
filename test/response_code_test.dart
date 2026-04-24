@@ -5,7 +5,8 @@ void main() {
   group('Response Code Test', () {
     test('ResponseCodeExtension value getter', () {
       expect(ResponseCode.SUCCESS.value, 200);
-      expect(ResponseCode.NO_CONTENT.value, 201);
+      expect(ResponseCode.CREATED.value, 201);
+      expect(ResponseCode.NO_CONTENT.value, 204);
       expect(ResponseCode.BAD_REQUEST.value, 400);
       expect(ResponseCode.UNAUTHORIZED.value, 401);
       expect(ResponseCode.FORBIDDEN.value, 403);
@@ -23,7 +24,8 @@ void main() {
 
     test('mapStatusCodeToEnum', () {
       expect(mapStatusCodeToEnum(200), ResponseCode.SUCCESS);
-      expect(mapStatusCodeToEnum(201), ResponseCode.NO_CONTENT);
+      expect(mapStatusCodeToEnum(201), ResponseCode.CREATED);
+      expect(mapStatusCodeToEnum(204), ResponseCode.NO_CONTENT);
       expect(mapStatusCodeToEnum(400), ResponseCode.BAD_REQUEST);
       expect(mapStatusCodeToEnum(401), ResponseCode.UNAUTHORIZED);
       expect(mapStatusCodeToEnum(403), ResponseCode.FORBIDDEN);
