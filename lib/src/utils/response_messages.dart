@@ -3,22 +3,28 @@
 import 'response_strings.dart';
 
 class ResponseMessage {
-  static const String SUCCESS = ResponseStrings.success; // success with data
-  static const String NO_CONTENT = ResponseStrings.success; // success with no data (no content)
-  static const String BAD_REQUEST = ResponseStrings.strBadRequestError; // failure, API rejected request
-  static const String UNAUTORISED = ResponseStrings.strUnauthorizedError; // failure, user is not authorised
-  static const String FORBIDDEN = ResponseStrings.strForbiddenError; //  failure, API rejected request
-  static const String INTERNAL_SERVER_ERROR = ResponseStrings.strInternalServerError; // failure, crash in server side
-  static const String NOT_FOUND = ResponseStrings.strNotFoundError; // failure, crash in server side
+  static const String SUCCESS = ResponseStrings.success;
+  static const String CREATED = ResponseStrings.strCreated;
+  static const String NO_CONTENT = ResponseStrings.strNoContent;
+  static const String BAD_REQUEST = ResponseStrings.strBadRequestError;
+  static const String UNAUTHORISED = ResponseStrings.strUnauthorizedError;
+  static const String FORBIDDEN = ResponseStrings.strForbiddenError;
+  static const String NOT_FOUND = ResponseStrings.strNotFoundError;
+  static const String CONFLICT = ResponseStrings.strConflictError;
+  static const String UNPROCESSABLE_ENTITY = ResponseStrings.strUnprocessableEntityError;
+  static const String TOO_MANY_REQUESTS = ResponseStrings.strTooManyRequestsError;
+  static const String INTERNAL_SERVER_ERROR = ResponseStrings.strInternalServerError;
+  static const String BAD_GATEWAY = ResponseStrings.strBadGatewayError;
+  static const String SERVICE_NOT_AVAILABLE = ResponseStrings.strServiceNotAvailableError;
 
-  // local status code
+  // local status codes
   static const String CONNECT_TIMEOUT = ResponseStrings.strTimeoutError;
-  static const String CANCEL = ResponseStrings.strCancelError;
-  static const String RECIEVE_TIMEOUT = ResponseStrings.strTimeoutError;
+  static const String RECEIVE_TIMEOUT = ResponseStrings.strTimeoutError;
   static const String SEND_TIMEOUT = ResponseStrings.strTimeoutError;
+  static const String REQUEST_TIMEOUT = ResponseStrings.strRequestTimeoutError;
+  static const String CANCEL = ResponseStrings.strCancelError;
   static const String CACHE_ERROR = ResponseStrings.strCacheError;
   static const String NO_INTERNET_CONNECTION = ResponseStrings.strNoInternetError;
   static const String CONNECTION_FAILURE = ResponseStrings.strConnectionFailureError;
-  static const String SERVICE_NOT_AVAILABLE = ResponseStrings.strServiceNotAvailableError;
   static const String DEFAULT = ResponseStrings.strDefaultError;
 }

@@ -51,7 +51,7 @@ abstract interface class ApiCacheHelper {
   /// Clears all cached data stored by the API Cache Manager asynchronously.
   /// Returns:
   ///   A future that completes when all cached data is successfully cleared.
-  Future clearAllCache();
+  Future<void> clearAllCache();
 }
 
 class ApiCacheHelperImplementation implements ApiCacheHelper {

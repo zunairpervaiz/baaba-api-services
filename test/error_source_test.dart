@@ -18,7 +18,7 @@ void main() {
           equals(const Failure(ErrorSource.forbidden, ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN)));
 
       expect(ErrorSource.unauthorised.getFailure(),
-          equals(const Failure(ErrorSource.unauthorised, ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTORISED)));
+          equals(const Failure(ErrorSource.unauthorised, ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORISED)));
 
       expect(ErrorSource.not_found.getFailure(),
           equals(const Failure(ErrorSource.not_found, ResponseCode.NOT_FOUND, ResponseMessage.NOT_FOUND)));
@@ -34,7 +34,7 @@ void main() {
       expect(ErrorSource.cancel.getFailure(), equals(const Failure(ErrorSource.cancel, ResponseCode.CANCEL, ResponseMessage.CANCEL)));
 
       expect(ErrorSource.receive_timeout.getFailure(),
-          equals(const Failure(ErrorSource.receive_timeout, ResponseCode.RECEIVE_TIMEOUT, ResponseMessage.RECIEVE_TIMEOUT)));
+          equals(const Failure(ErrorSource.receive_timeout, ResponseCode.RECEIVE_TIMEOUT, ResponseMessage.RECEIVE_TIMEOUT)));
 
       expect(ErrorSource.send_timeout.getFailure(),
           equals(const Failure(ErrorSource.send_timeout, ResponseCode.SEND_TIMEOUT, ResponseMessage.SEND_TIMEOUT)));

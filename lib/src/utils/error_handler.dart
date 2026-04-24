@@ -5,7 +5,7 @@ import 'package:dio/dio.dart';
 
 import 'constants.dart';
 
-class ErrorHandler implements Exception {
+class ErrorHandler {
   // Represents the failure object associated with the error.
   late Failure failure;
 

@@ -3,5 +3,5 @@ import 'package:internet_connection_checker_plus/internet_connection_checker_plu
 class NetworkInfo {
   final InternetConnection _internetConnection = InternetConnection();
 
-  Future<bool>? get isConnected async => await _internetConnection.hasInternetAccess;
+  Future<bool> get isConnected async => await _internetConnection.hasInternetAccess;
 }

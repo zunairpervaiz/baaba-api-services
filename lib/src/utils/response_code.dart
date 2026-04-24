@@ -5,19 +5,25 @@ import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 /// Enumeration representing various response codes and corresponding error states.
 enum ResponseCode {
   SUCCESS,
+  CREATED,
   NO_CONTENT,
   BAD_REQUEST,
   UNAUTHORIZED,
   FORBIDDEN,
-  INTERNAL_SERVER_ERROR,
   NOT_FOUND,
+  REQUEST_TIMEOUT,
+  CONFLICT,
+  UNPROCESSABLE_ENTITY,
+  TOO_MANY_REQUESTS,
+  INTERNAL_SERVER_ERROR,
+  BAD_GATEWAY,
+  SERVICE_NOT_AVAILABLE,
   CONNECT_TIMEOUT,
   CANCEL,
   RECEIVE_TIMEOUT,
   SEND_TIMEOUT,
   CACHE_ERROR,
   NO_INTERNET_CONNECTION,
-  SERVICE_NOT_AVAILABLE,
   DEFAULT,
   CONNECTION_FAILURE,
 }
@@ -28,8 +34,10 @@ extension ResponseCodeExtension on ResponseCode {
     switch (this) {
       case ResponseCode.SUCCESS:
         return 200;
-      case ResponseCode.NO_CONTENT:
+      case ResponseCode.CREATED:
         return 201;
+      case ResponseCode.NO_CONTENT:
+        return 204;
       case ResponseCode.BAD_REQUEST:
         return 400;
       case ResponseCode.UNAUTHORIZED:
@@ -42,6 +50,16 @@ extension ResponseCodeExtension on ResponseCode {
         return 503;
       case ResponseCode.NOT_FOUND:
         return 404;
+      case ResponseCode.REQUEST_TIMEOUT:
+        return 408;
+      case ResponseCode.CONFLICT:
+        return 409;
+      case ResponseCode.UNPROCESSABLE_ENTITY:
+        return 422;
+      case ResponseCode.TOO_MANY_REQUESTS:
+        return 429;
+      case ResponseCode.BAD_GATEWAY:
+        return 502;
       case ResponseCode.CONNECT_TIMEOUT:
         return -1;
       case ResponseCode.CANCEL:
@@ -68,6 +86,8 @@ ResponseCode mapStatusCodeToEnum(int statusCode) {
     case 200:
       return ResponseCode.SUCCESS;
     case 201:
+      return ResponseCode.CREATED;
+    case 204:
       return ResponseCode.NO_CONTENT;
     case 400:
       return ResponseCode.BAD_REQUEST;
@@ -77,6 +97,16 @@ ResponseCode mapStatusCodeToEnum(int statusCode) {
       return ResponseCode.FORBIDDEN;
     case 404:
       return ResponseCode.NOT_FOUND;
+    case 408:
+      return ResponseCode.REQUEST_TIMEOUT;
+    case 409:
+      return ResponseCode.CONFLICT;
+    case 422:
+      return ResponseCode.UNPROCESSABLE_ENTITY;
+    case 429:
+      return ResponseCode.TOO_MANY_REQUESTS;
+    case 502:
+      return ResponseCode.BAD_GATEWAY;
     case 500:
       return ResponseCode.INTERNAL_SERVER_ERROR;
     case 503:
@@ -105,12 +135,18 @@ ResponseCode mapStatusCodeToEnum(int statusCode) {
 
 ErrorSource mapResponseCodeToEnum(ResponseCode code) => switch (code) {
       ResponseCode.SUCCESS => ErrorSource.success,
+      ResponseCode.CREATED => ErrorSource.created,
       ResponseCode.NO_CONTENT => ErrorSource.no_content,
       ResponseCode.BAD_REQUEST => ErrorSource.bad_request,
       ResponseCode.UNAUTHORIZED => ErrorSource.unauthorised,
       ResponseCode.FORBIDDEN => ErrorSource.forbidden,
       ResponseCode.INTERNAL_SERVER_ERROR => ErrorSource.internal_server_error,
       ResponseCode.NOT_FOUND => ErrorSource.not_found,
+      ResponseCode.REQUEST_TIMEOUT => ErrorSource.request_timeout,
+      ResponseCode.CONFLICT => ErrorSource.conflict,
+      ResponseCode.UNPROCESSABLE_ENTITY => ErrorSource.unprocessable_entity,
+      ResponseCode.TOO_MANY_REQUESTS => ErrorSource.too_many_requests,
+      ResponseCode.BAD_GATEWAY => ErrorSource.bad_gateway,
       ResponseCode.CONNECT_TIMEOUT => ErrorSource.connection_timeout,
       ResponseCode.CANCEL => ErrorSource.cancel,
       ResponseCode.RECEIVE_TIMEOUT => ErrorSource.receive_timeout,

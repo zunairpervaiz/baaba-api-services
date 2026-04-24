@@ -7,12 +7,18 @@ import 'package:baaba_api_handler/src/utils/response_messages.dart';
 /// Enumeration representing different data sources or error types.
 enum ErrorSource {
   success,
+  created,
   no_content,
   bad_request,
   forbidden,
   unauthorised,
   not_found,
+  request_timeout,
+  conflict,
+  unprocessable_entity,
+  too_many_requests,
   internal_server_error,
+  bad_gateway,
   connection_timeout,
   cancel,
   receive_timeout,
@@ -33,6 +39,8 @@ extension ErrorSourceExtension on ErrorSource {
     switch (this) {
       case ErrorSource.success:
         return Failure(this, ResponseCode.SUCCESS, ResponseMessage.SUCCESS);
+      case ErrorSource.created:
+        return Failure(this, ResponseCode.CREATED, ResponseMessage.CREATED);
       case ErrorSource.no_content:
         return Failure(this, ResponseCode.NO_CONTENT, ResponseMessage.NO_CONTENT);
       case ErrorSource.bad_request:
@@ -40,17 +48,27 @@ extension ErrorSourceExtension on ErrorSource {
       case ErrorSource.forbidden:
         return Failure(this, ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
       case ErrorSource.unauthorised:
-        return Failure(this, ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTORISED);
+        return Failure(this, ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORISED);
       case ErrorSource.not_found:
         return Failure(this, ResponseCode.NOT_FOUND, ResponseMessage.NOT_FOUND);
+      case ErrorSource.request_timeout:
+        return Failure(this, ResponseCode.REQUEST_TIMEOUT, ResponseMessage.REQUEST_TIMEOUT);
+      case ErrorSource.conflict:
+        return Failure(this, ResponseCode.CONFLICT, ResponseMessage.CONFLICT);
+      case ErrorSource.unprocessable_entity:
+        return Failure(this, ResponseCode.UNPROCESSABLE_ENTITY, ResponseMessage.UNPROCESSABLE_ENTITY);
+      case ErrorSource.too_many_requests:
+        return Failure(this, ResponseCode.TOO_MANY_REQUESTS, ResponseMessage.TOO_MANY_REQUESTS);
       case ErrorSource.internal_server_error:
         return Failure(this, ResponseCode.INTERNAL_SERVER_ERROR, ResponseMessage.INTERNAL_SERVER_ERROR);
+      case ErrorSource.bad_gateway:
+        return Failure(this, ResponseCode.BAD_GATEWAY, ResponseMessage.BAD_GATEWAY);
       case ErrorSource.connection_timeout:
         return Failure(this, ResponseCode.CONNECT_TIMEOUT, ResponseMessage.CONNECT_TIMEOUT);
       case ErrorSource.cancel:
         return Failure(this, ResponseCode.CANCEL, ResponseMessage.CANCEL);
       case ErrorSource.receive_timeout:
-        return Failure(this, ResponseCode.RECEIVE_TIMEOUT, ResponseMessage.RECIEVE_TIMEOUT);
+        return Failure(this, ResponseCode.RECEIVE_TIMEOUT, ResponseMessage.RECEIVE_TIMEOUT);
       case ErrorSource.send_timeout:
         return Failure(this, ResponseCode.SEND_TIMEOUT, ResponseMessage.SEND_TIMEOUT);
       case ErrorSource.cache_error:
