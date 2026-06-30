@@ -2,43 +2,44 @@ import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('Response Code Test', () {
-    test('ResponseCodeExtension value getter', () {
-      expect(ResponseCode.SUCCESS.value, 200);
-      expect(ResponseCode.CREATED.value, 201);
-      expect(ResponseCode.NO_CONTENT.value, 204);
-      expect(ResponseCode.BAD_REQUEST.value, 400);
-      expect(ResponseCode.UNAUTHORIZED.value, 401);
-      expect(ResponseCode.FORBIDDEN.value, 403);
-      expect(ResponseCode.NOT_FOUND.value, 404);
-      expect(ResponseCode.INTERNAL_SERVER_ERROR.value, 500);
-      expect(ResponseCode.CONNECT_TIMEOUT.value, -1);
-      expect(ResponseCode.CANCEL.value, -2);
-      expect(ResponseCode.RECEIVE_TIMEOUT.value, -3);
-      expect(ResponseCode.SEND_TIMEOUT.value, -4);
-      expect(ResponseCode.CACHE_ERROR.value, -5);
-      expect(ResponseCode.NO_INTERNET_CONNECTION.value, -6);
-      expect(ResponseCode.DEFAULT.value, -7);
-      expect(ResponseCode.CONNECTION_FAILURE.value, -8);
+  group('ResponseCode', () {
+    test('value getter returns correct integer for each code', () {
+      expect(ResponseCode.success.value, 200);
+      expect(ResponseCode.created.value, 201);
+      expect(ResponseCode.noContent.value, 204);
+      expect(ResponseCode.badRequest.value, 400);
+      expect(ResponseCode.unauthorized.value, 401);
+      expect(ResponseCode.forbidden.value, 403);
+      expect(ResponseCode.notFound.value, 404);
+      expect(ResponseCode.internalServerError.value, 500);
+      expect(ResponseCode.connectTimeout.value, -1);
+      expect(ResponseCode.cancel.value, -2);
+      expect(ResponseCode.receiveTimeout.value, -3);
+      expect(ResponseCode.sendTimeout.value, -4);
+      expect(ResponseCode.cacheError.value, -5);
+      expect(ResponseCode.noInternetConnection.value, -6);
+      expect(ResponseCode.defaultError.value, -7);
+      expect(ResponseCode.connectionFailure.value, -8);
     });
 
-    test('mapStatusCodeToEnum', () {
-      expect(mapStatusCodeToEnum(200), ResponseCode.SUCCESS);
-      expect(mapStatusCodeToEnum(201), ResponseCode.CREATED);
-      expect(mapStatusCodeToEnum(204), ResponseCode.NO_CONTENT);
-      expect(mapStatusCodeToEnum(400), ResponseCode.BAD_REQUEST);
-      expect(mapStatusCodeToEnum(401), ResponseCode.UNAUTHORIZED);
-      expect(mapStatusCodeToEnum(403), ResponseCode.FORBIDDEN);
-      expect(mapStatusCodeToEnum(404), ResponseCode.NOT_FOUND);
-      expect(mapStatusCodeToEnum(500), ResponseCode.INTERNAL_SERVER_ERROR);
-      expect(mapStatusCodeToEnum(-1), ResponseCode.CONNECT_TIMEOUT);
-      expect(mapStatusCodeToEnum(-2), ResponseCode.CANCEL);
-      expect(mapStatusCodeToEnum(-3), ResponseCode.RECEIVE_TIMEOUT);
-      expect(mapStatusCodeToEnum(-4), ResponseCode.SEND_TIMEOUT);
-      expect(mapStatusCodeToEnum(-5), ResponseCode.CACHE_ERROR);
-      expect(mapStatusCodeToEnum(-6), ResponseCode.NO_INTERNET_CONNECTION);
-      expect(mapStatusCodeToEnum(-7), ResponseCode.DEFAULT);
-      expect(mapStatusCodeToEnum(-8), ResponseCode.CONNECTION_FAILURE);
+    test('mapStatusCodeToEnum maps integers to the correct ResponseCode', () {
+      expect(mapStatusCodeToEnum(200), ResponseCode.success);
+      expect(mapStatusCodeToEnum(201), ResponseCode.created);
+      expect(mapStatusCodeToEnum(204), ResponseCode.noContent);
+      expect(mapStatusCodeToEnum(400), ResponseCode.badRequest);
+      expect(mapStatusCodeToEnum(401), ResponseCode.unauthorized);
+      expect(mapStatusCodeToEnum(403), ResponseCode.forbidden);
+      expect(mapStatusCodeToEnum(404), ResponseCode.notFound);
+      expect(mapStatusCodeToEnum(500), ResponseCode.internalServerError);
+      expect(mapStatusCodeToEnum(-1), ResponseCode.connectTimeout);
+      expect(mapStatusCodeToEnum(-2), ResponseCode.cancel);
+      expect(mapStatusCodeToEnum(-3), ResponseCode.receiveTimeout);
+      expect(mapStatusCodeToEnum(-4), ResponseCode.sendTimeout);
+      expect(mapStatusCodeToEnum(-5), ResponseCode.cacheError);
+      expect(mapStatusCodeToEnum(-6), ResponseCode.noInternetConnection);
+      expect(mapStatusCodeToEnum(-7), ResponseCode.defaultError);
+      expect(mapStatusCodeToEnum(-8), ResponseCode.connectionFailure);
+      expect(mapStatusCodeToEnum(9999), ResponseCode.defaultError);
     });
   });
 }

@@ -4,36 +4,30 @@ import 'package:flutter/foundation.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 
 class DioFactory {
-  // Method to get a configured Dio instance
   Dio getDio({
-    Map<String, String>? header, // Optional parameter: custom headers
-    Duration? receivedTimeout, // Optional parameter: receive timeout
-    Duration? sendTimeout, // Optional parameter: send timeout
+    Map<String, String>? header,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
   }) {
-    Dio dio = Dio(); // Create a new Dio instance
+    final dio = Dio(BaseOptions(
+      headers: header,
+      receiveTimeout: receiveTimeout,
+      sendTimeout: sendTimeout,
+    ));
 
-    // Configure Dio options
-    dio.options = BaseOptions(
-      headers: header, // Set custom headers
-      receiveTimeout: receivedTimeout, // Set receive timeout
-      sendTimeout: sendTimeout, // Set send timeout
-    );
+    dio.interceptors.add(NetworkRetryInterceptor(dio: dio));
 
-    dio.interceptors.add(NetworkRetryInterceptor(dio: dio)); // Add custom network retry interceptor
-
-    // Add PrettyDioLogger interceptor for debugging in non-release mode
     if (!kReleaseMode) {
       dio.interceptors.add(PrettyDioLogger(
-        requestHeader: false, // Do not log request headers
-        responseHeader: false, // Do not log response headers
-        request: true, // log request information
-        requestBody: true, // Log request body
-        responseBody: true, // Log response body
-        error: true, // Log errors
+        requestHeader: false,
+        responseHeader: false,
+        request: true,
+        requestBody: true,
+        responseBody: true,
+        error: true,
       ));
     }
 
-    // Return the configured Dio instance
     return dio;
   }
 }

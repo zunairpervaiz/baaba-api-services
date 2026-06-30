@@ -31,7 +31,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^1.0.7
+  baaba_api_handler: ^1.1.0
 ```
 
 #### 2. Install Packages
@@ -113,12 +113,13 @@ ApiServices.configure(
 );
 ```
 
-| Parameter        | Type                                    | Required | Description                                                                          |
-| ---------------- | --------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
-| `getToken`       | `Future<String?> Function()`            | Yes      | Returns the current token. Called before every outgoing request.                     |
-| `onTokenRefresh` | `Future<bool> Function()`               | Yes      | Performs the token refresh. Returns `true` on success.                               |
-| `onRefreshFailed`| `void Function()?`                      | No       | Called when refresh fails (e.g. to trigger logout).                                  |
-| `headerBuilder`  | `Map<String, String> Function(String)?` | No       | Builds auth headers from the token. Defaults to `Authorization: Bearer <token>`.     |
+| Parameter                  | Type                                    | Required | Description                                                                                                                  |
+| -------------------------- | --------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `getToken`                 | `Future<String?> Function()`            | Yes      | Returns the current token. Called before every outgoing request.                                                             |
+| `onTokenRefresh`           | `Future<bool> Function()`               | Yes      | Performs the token refresh. Returns `true` on success.                                                                       |
+| `onRefreshFailed`          | `void Function()?`                      | No       | Called when refresh fails (e.g. to trigger logout).                                                                          |
+| `headerBuilder`            | `Map<String, String> Function(String)?` | No       | Builds auth headers from the token. Defaults to `Authorization: Bearer <token>`.                                             |
+| `bypassConnectivityCheck`  | `bool`                                  | No       | Skip the pre-flight internet connectivity check. Use in staging or internal environments where connectivity probes always fail due to proxies or firewalls. Defaults to `false`. |
 
 > If you do not need token auth, skip this and call `ApiServices.instance()` directly.
 
@@ -151,6 +152,31 @@ ApiServices.configure(
 ```
 
 The returned map is merged into every request's headers, including automatic retries after a token refresh.
+
+#### Bypass Connectivity Check
+
+On internal or staging networks where external connectivity probes always fail (e.g. behind a proxy or firewall), pass `bypassConnectivityCheck: true` to skip the pre-flight check:
+
+```dart
+// Staging entry point — internal network with proxy
+ApiServices.configure(
+  getToken: () async => await storage.read(key: 'access_token'),
+  onTokenRefresh: () async => await authRepository.refresh(),
+  onRefreshFailed: () => authController.logout(),
+  bypassConnectivityCheck: true,
+);
+```
+
+If you don't need token auth but still need to disable the connectivity check, use `setConnectivityCheck`:
+
+```dart
+// Before configureDependencies() in your staging entry point
+ApiServices.setConnectivityCheck(enabled: false);
+```
+
+| Parameter | Type   | Default | Description                                                   |
+| --------- | ------ | ------- | ------------------------------------------------------------- |
+| `enabled` | `bool` | `true`  | Set to `false` to skip the check; `true` to re-enable it.    |
 
 ---
 
@@ -195,7 +221,7 @@ final response = await apiServices.delete(endpoint: 'https://api.example.com/use
 
 #### 1.7 Cancel Request
 
-Cancel the most recent in-flight request:
+Cancel all in-flight requests at once:
 
 ```dart
 apiServices.cancelRequest();

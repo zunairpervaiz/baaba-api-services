@@ -1,57 +1,74 @@
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
-import 'package:baaba_api_handler/src/utils/response_messages.dart';
+import 'package:baaba_api_handler/src/utils/response_strings.dart';
 import 'package:baaba_api_handler/ts_api_handler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('ErrorSourceExtension', () {
-    test('getFailure() returns correct Failure object for each ErrorSource', () {
-      expect(ErrorSource.success.getFailure(), equals(const Failure(ErrorSource.success, ResponseCode.SUCCESS, ResponseMessage.SUCCESS)));
-
-      expect(ErrorSource.no_content.getFailure(),
-          equals(const Failure(ErrorSource.no_content, ResponseCode.NO_CONTENT, ResponseMessage.NO_CONTENT)));
-
-      expect(ErrorSource.bad_request.getFailure(),
-          equals(const Failure(ErrorSource.bad_request, ResponseCode.BAD_REQUEST, ResponseMessage.BAD_REQUEST)));
-
-      expect(ErrorSource.forbidden.getFailure(),
-          equals(const Failure(ErrorSource.forbidden, ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN)));
-
-      expect(ErrorSource.unauthorised.getFailure(),
-          equals(const Failure(ErrorSource.unauthorised, ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORISED)));
-
-      expect(ErrorSource.not_found.getFailure(),
-          equals(const Failure(ErrorSource.not_found, ResponseCode.NOT_FOUND, ResponseMessage.NOT_FOUND)));
-
+    test('getFailure() returns correct Failure for each ErrorSource', () {
       expect(
-          ErrorSource.internal_server_error.getFailure(),
-          equals(
-              const Failure(ErrorSource.internal_server_error, ResponseCode.INTERNAL_SERVER_ERROR, ResponseMessage.INTERNAL_SERVER_ERROR)));
-
-      expect(ErrorSource.connection_timeout.getFailure(),
-          equals(const Failure(ErrorSource.connection_timeout, ResponseCode.CONNECT_TIMEOUT, ResponseMessage.CONNECT_TIMEOUT)));
-
-      expect(ErrorSource.cancel.getFailure(), equals(const Failure(ErrorSource.cancel, ResponseCode.CANCEL, ResponseMessage.CANCEL)));
-
-      expect(ErrorSource.receive_timeout.getFailure(),
-          equals(const Failure(ErrorSource.receive_timeout, ResponseCode.RECEIVE_TIMEOUT, ResponseMessage.RECEIVE_TIMEOUT)));
-
-      expect(ErrorSource.send_timeout.getFailure(),
-          equals(const Failure(ErrorSource.send_timeout, ResponseCode.SEND_TIMEOUT, ResponseMessage.SEND_TIMEOUT)));
-
-      expect(ErrorSource.cache_error.getFailure(),
-          equals(const Failure(ErrorSource.cache_error, ResponseCode.CACHE_ERROR, ResponseMessage.CACHE_ERROR)));
-
+        ErrorSource.success.getFailure(),
+        equals(const Failure(ErrorSource.success, ResponseCode.success, ResponseStrings.success)),
+      );
       expect(
-          ErrorSource.no_internet_connection.getFailure(),
-          equals(const Failure(
-              ErrorSource.no_internet_connection, ResponseCode.NO_INTERNET_CONNECTION, ResponseMessage.NO_INTERNET_CONNECTION)));
-
-      expect(ErrorSource.connection_failure.getFailure(),
-          equals(const Failure(ErrorSource.connection_failure, ResponseCode.CONNECTION_FAILURE, ResponseMessage.CONNECTION_FAILURE)));
-
-      expect(ErrorSource.default_error.getFailure(),
-          equals(const Failure(ErrorSource.default_error, ResponseCode.DEFAULT, ResponseMessage.DEFAULT)));
+        ErrorSource.noContent.getFailure(),
+        equals(const Failure(ErrorSource.noContent, ResponseCode.noContent, ResponseStrings.noContent)),
+      );
+      expect(
+        ErrorSource.badRequest.getFailure(),
+        equals(const Failure(ErrorSource.badRequest, ResponseCode.badRequest, ResponseStrings.badRequest)),
+      );
+      expect(
+        ErrorSource.forbidden.getFailure(),
+        equals(const Failure(ErrorSource.forbidden, ResponseCode.forbidden, ResponseStrings.forbidden)),
+      );
+      expect(
+        ErrorSource.unauthorized.getFailure(),
+        equals(const Failure(ErrorSource.unauthorized, ResponseCode.unauthorized, ResponseStrings.unauthorized)),
+      );
+      expect(
+        ErrorSource.notFound.getFailure(),
+        equals(const Failure(ErrorSource.notFound, ResponseCode.notFound, ResponseStrings.notFound)),
+      );
+      expect(
+        ErrorSource.internalServerError.getFailure(),
+        equals(const Failure(
+            ErrorSource.internalServerError, ResponseCode.internalServerError, ResponseStrings.internalServerError)),
+      );
+      expect(
+        ErrorSource.connectionTimeout.getFailure(),
+        equals(const Failure(ErrorSource.connectionTimeout, ResponseCode.connectTimeout, ResponseStrings.connectTimeout)),
+      );
+      expect(
+        ErrorSource.cancel.getFailure(),
+        equals(const Failure(ErrorSource.cancel, ResponseCode.cancel, ResponseStrings.cancel)),
+      );
+      expect(
+        ErrorSource.receiveTimeout.getFailure(),
+        equals(const Failure(ErrorSource.receiveTimeout, ResponseCode.receiveTimeout, ResponseStrings.receiveTimeout)),
+      );
+      expect(
+        ErrorSource.sendTimeout.getFailure(),
+        equals(const Failure(ErrorSource.sendTimeout, ResponseCode.sendTimeout, ResponseStrings.sendTimeout)),
+      );
+      expect(
+        ErrorSource.cacheError.getFailure(),
+        equals(const Failure(ErrorSource.cacheError, ResponseCode.cacheError, ResponseStrings.cacheError)),
+      );
+      expect(
+        ErrorSource.noInternetConnection.getFailure(),
+        equals(const Failure(
+            ErrorSource.noInternetConnection, ResponseCode.noInternetConnection, ResponseStrings.noInternetConnection)),
+      );
+      expect(
+        ErrorSource.connectionFailure.getFailure(),
+        equals(
+            const Failure(ErrorSource.connectionFailure, ResponseCode.connectionFailure, ResponseStrings.connectionFailure)),
+      );
+      expect(
+        ErrorSource.defaultError.getFailure(),
+        equals(const Failure(ErrorSource.defaultError, ResponseCode.defaultError, ResponseStrings.defaultError)),
+      );
     });
   });
 }

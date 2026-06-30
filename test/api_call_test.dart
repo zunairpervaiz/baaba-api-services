@@ -1,95 +1,137 @@
 import 'package:baaba_api_handler/src/api_service.dart';
+import 'package:baaba_api_handler/src/utils/network_info.dart';
 import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:baaba_api_handler/ts_api_handler.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:fpdart/fpdart.dart';
 import 'package:mocktail/mocktail.dart';
 
-// Define a mock class for Dio
 class MockDio extends Mock implements Dio {}
+
+class MockNetworkInfo extends Mock implements NetworkInfo {}
 
 void main() {
   runApiTestCases();
 }
 
 void runApiTestCases() {
-  // Define a group of tests for API services
   group('API Services Test', () {
     late ApiServices apiServices;
     late MockDio mockDio;
+    late MockNetworkInfo mockNetworkInfo;
+
+    final successResponse = Response(
+      requestOptions: RequestOptions(path: ''),
+      statusCode: 200,
+    );
 
     setUp(() {
-      // Initialize the mock Dio instance and the API services
       mockDio = MockDio();
-      apiServices = ApiServicesImplementation.instanceFor(dio: mockDio);
+      mockNetworkInfo = MockNetworkInfo();
+
+      registerFallbackValue(RequestOptions(path: ''));
+      registerFallbackValue(Options());
+
+      when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => true);
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenAnswer((_) async => successResponse);
+
+      apiServices = ApiServicesImplementation.instanceFor(
+        dio: mockDio,
+        networkInfo: mockNetworkInfo,
+      );
     });
 
-    // Define a function to test HTTP methods
-    void testHttpMethod(String methodName, Future<Response> Function(String) mockFunction) {
-      // Define a test case for each HTTP method
-      test("Test $methodName request", () async {
-        // Prepare a mock response
-        final response = Response(requestOptions: RequestOptions(baseUrl: "https://example.com"), statusCode: 200);
-        // Set up the mock function to return the mock response
-        when(() => mockFunction(any())).thenAnswer((_) async => response);
+    test('GET returns Right(Response) on success', () async {
+      final result = await apiServices.get(endpoint: '/users');
+      expect(result.isRight(), isTrue);
+      result.fold(
+        (f) => fail('Expected success, got $f'),
+        (r) => expect(r.statusCode, 200),
+      );
+    });
 
-        late final Either<Failure, Response<dynamic>> result;
+    test('POST returns Right(Response) on success', () async {
+      final result = await apiServices.post(endpoint: '/users', data: {'name': 'test'});
+      expect(result.isRight(), isTrue);
+    });
 
-        // Execute the corresponding API method based on the HTTP method
+    test('PUT returns Right(Response) on success', () async {
+      final result = await apiServices.put(endpoint: '/users/1', data: {'name': 'test'});
+      expect(result.isRight(), isTrue);
+    });
 
-        switch (methodName) {
-          case "GET":
-            result = await apiServices.get(endpoint: '/getUser');
-            break;
-          case "POST":
-            result = await apiServices.post(endpoint: '/signup');
-            break;
-          case "PUT":
-            result = await apiServices.put(endpoint: '/update');
-            break;
-          case "PATCH":
-            result = await apiServices.patch(endpoint: '/update');
-            break;
-          case "DELETE":
-            result = await apiServices.delete(endpoint: '/delete');
-            break;
-        }
-        // Assert that the result is of type Either<Failure, Response>
-        expect(result, isA<Either<Failure, Response>>());
-      });
-    }
+    test('PATCH returns Right(Response) on success', () async {
+      final result = await apiServices.patch(endpoint: '/users/1', data: {'name': 'test'});
+      expect(result.isRight(), isTrue);
+    });
 
-    // Test each HTTP method using the testHttpMethod function
+    test('DELETE returns Right(Response) on success', () async {
+      final result = await apiServices.delete(endpoint: '/users/1');
+      expect(result.isRight(), isTrue);
+    });
 
-    testHttpMethod("GET", (endPoint) => mockDio.get(endPoint));
-    testHttpMethod("POST", (endPoint) => mockDio.post(endPoint));
-    testHttpMethod("PUT", (endPoint) => mockDio.put(endPoint));
-    testHttpMethod("PATCH", (endPoint) => mockDio.patch(endPoint));
-    testHttpMethod("DELETE", (endPoint) => mockDio.delete(endPoint));
+    test('returns Left(Failure) when offline', () async {
+      when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => false);
+      final result = await apiServices.get(endpoint: '/users');
+      expect(result.isLeft(), isTrue);
+      result.fold(
+        (f) => expect(f.errorType, ErrorSource.noInternetConnection),
+        (_) => fail('Expected failure'),
+      );
+    });
+
+    test('returns Left(Failure) on DioException', () async {
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenThrow(DioException(
+        requestOptions: RequestOptions(path: ''),
+        type: DioExceptionType.connectionTimeout,
+      ));
+
+      final result = await apiServices.get(endpoint: '/users');
+      expect(result.isLeft(), isTrue);
+      result.fold(
+        (f) => expect(f.errorType, ErrorSource.connectionTimeout),
+        (_) => fail('Expected failure'),
+      );
+    });
   });
 
-  group('table-driven tests', () {
+  group('mapResponseCodeToEnum', () {
     final testCases = {
-      ResponseCode.SUCCESS: ErrorSource.success,
-      ResponseCode.NO_CONTENT: ErrorSource.no_content,
-      ResponseCode.BAD_REQUEST: ErrorSource.bad_request,
-      ResponseCode.UNAUTHORIZED: ErrorSource.unauthorised,
-      ResponseCode.FORBIDDEN: ErrorSource.forbidden,
-      ResponseCode.INTERNAL_SERVER_ERROR: ErrorSource.internal_server_error,
-      ResponseCode.NOT_FOUND: ErrorSource.not_found,
-      ResponseCode.CONNECT_TIMEOUT: ErrorSource.connection_timeout,
-      ResponseCode.CANCEL: ErrorSource.cancel,
-      ResponseCode.RECEIVE_TIMEOUT: ErrorSource.receive_timeout,
-      ResponseCode.SEND_TIMEOUT: ErrorSource.send_timeout,
-      ResponseCode.CACHE_ERROR: ErrorSource.cache_error,
-      ResponseCode.NO_INTERNET_CONNECTION: ErrorSource.no_internet_connection,
-      ResponseCode.DEFAULT: ErrorSource.default_error,
-      ResponseCode.CONNECTION_FAILURE: ErrorSource.connection_failure,
+      ResponseCode.success: ErrorSource.success,
+      ResponseCode.noContent: ErrorSource.noContent,
+      ResponseCode.badRequest: ErrorSource.badRequest,
+      ResponseCode.unauthorized: ErrorSource.unauthorized,
+      ResponseCode.forbidden: ErrorSource.forbidden,
+      ResponseCode.internalServerError: ErrorSource.internalServerError,
+      ResponseCode.notFound: ErrorSource.notFound,
+      ResponseCode.connectTimeout: ErrorSource.connectionTimeout,
+      ResponseCode.cancel: ErrorSource.cancel,
+      ResponseCode.receiveTimeout: ErrorSource.receiveTimeout,
+      ResponseCode.sendTimeout: ErrorSource.sendTimeout,
+      ResponseCode.cacheError: ErrorSource.cacheError,
+      ResponseCode.noInternetConnection: ErrorSource.noInternetConnection,
+      ResponseCode.defaultError: ErrorSource.defaultError,
+      ResponseCode.connectionFailure: ErrorSource.connectionFailure,
     };
 
     testCases.forEach((responseCode, expectedErrorSource) {
-      test('should map $responseCode to $expectedErrorSource', () {
+      test('$responseCode maps to $expectedErrorSource', () {
         expect(mapResponseCodeToEnum(responseCode), equals(expectedErrorSource));
       });
     });

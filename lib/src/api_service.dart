@@ -9,53 +9,164 @@ import 'package:baaba_api_handler/src/utils/network_info.dart';
 import 'package:dio/dio.dart';
 import 'package:fpdart/fpdart.dart';
 
-/// A class responsible for handling various API services.
+/// A typed HTTP client wrapping Dio. All methods return `Either<Failure, Response>` —
+/// use `.fold(onLeft, onRight)` to handle errors and successes without exceptions.
+///
+/// ---
+///
+/// ## Setup
+///
+/// Call [configure] once at app startup (before any request) to enable token
+/// auth and automatic token refresh on 401:
+///
+/// ```dart
+/// ApiServices.configure(
+///   getToken: () async => await storage.read('token'),
+///   onTokenRefresh: () async => await authRepo.refresh(),
+///   onRefreshFailed: () => Get.offAllNamed(Routes.login),
+/// );
+/// ```
+///
+/// If you don't need token auth, skip [configure] and use [instance] directly.
+///
+/// ---
+///
+/// ## Making requests
+///
+/// ```dart
+/// final result = await ApiServices.instance().get(endpoint: '/users');
+///
+/// result.fold(
+///   (failure) => print(failure.message),
+///   (response) => print(response.data),
+/// );
+/// ```
+///
+/// Or inject via your DI framework and wrap in your own service layer:
+///
+/// ```dart
+/// final result = await _apiServices.post(
+///   endpoint: '/orders',
+///   data: order.toJson(),
+/// );
+/// ```
 abstract interface class ApiServices {
-  static ApiServices? _apiServices;
+  static ApiServices? _instance;
+  static bool _bypassConnectivityCheck = false;
 
-  /// [ApiServices] provides API communication functionalities.
+  /// Returns the singleton instance.
+  ///
+  /// If [configure] was called first, the instance already has the token
+  /// interceptor attached. Otherwise you get a plain Dio client.
+  ///
+  /// Pass a custom [dio] only in tests — do not use in production code.
   static ApiServices instance([Dio? dio]) {
-    _apiServices ??= ApiServicesImplementation.instance(dio);
-    return _apiServices!;
+    _instance ??= ApiServicesImplementation.instanceFor(
+      dio: dio ?? DioFactory().getDio(),
+    );
+    return _instance!;
   }
 
   /// Configures [ApiServices] with token-based authentication and automatic
   /// token refresh on 401 responses.
   ///
-  /// Call this once at app startup before using [instance].
+  /// Call once at app startup before [instance]. Calling it again replaces the
+  /// singleton (useful for re-login after logout).
   ///
-  /// - [getToken]: returns the current bearer token.
-  /// - [onTokenRefresh]: performs the refresh and returns true on success.
-  /// - [onRefreshFailed]: called when refresh fails (e.g. to trigger logout).
-  /// - [headerBuilder]: optional — builds the auth headers from the token.
-  ///   Defaults to `{'Authorization': 'Bearer <token>'}` when omitted.
+  /// **Parameters:**
+  ///
+  /// - [getToken] — returns the current bearer token from storage. Called before
+  ///   every request to attach the `Authorization` header.
+  ///
+  /// - [onTokenRefresh] — performs the actual refresh (e.g. calls `/auth/refresh`
+  ///   and saves the new token). Return `true` on success, `false` on failure.
+  ///
+  /// - [onRefreshFailed] — called when refresh returns `false` or throws.
+  ///   Use this to log the user out or navigate to the login screen.
+  ///
+  /// - [headerBuilder] — customises the auth headers built from the token.
+  ///   Omit to use the default `{'Authorization': 'Bearer <token>'}`.
+  ///
+  /// - [bypassConnectivityCheck] — when `true`, skips the pre-flight internet
+  ///   connectivity check. Use in staging/internal environments where external
+  ///   connectivity probes fail because of proxies or firewalls.
+  ///   See also [setConnectivityCheck].
+  ///
+  /// **Example:**
+  ///
+  /// ```dart
+  /// // main_production.dart
+  /// ApiServices.configure(
+  ///   getToken: () async => GetToken.getToken(),
+  ///   onTokenRefresh: AuthSessionService.refreshToken,
+  ///   onRefreshFailed: AuthSessionService.onSessionExpired,
+  /// );
+  ///
+  /// // main_staging.dart — internal network with proxy
+  /// ApiServices.configure(
+  ///   getToken: () async => GetToken.getToken(),
+  ///   onTokenRefresh: AuthSessionService.refreshToken,
+  ///   onRefreshFailed: AuthSessionService.onSessionExpired,
+  ///   bypassConnectivityCheck: true,
+  /// );
+  /// ```
   static void configure({
     required Future<String?> Function() getToken,
     required Future<bool> Function() onTokenRefresh,
     void Function()? onRefreshFailed,
     Map<String, String> Function(String token)? headerBuilder,
+    bool bypassConnectivityCheck = false,
   }) {
-    _apiServices = null;
-    ApiServicesImplementation._configure(
+    _bypassConnectivityCheck = bypassConnectivityCheck;
+    final dio = DioFactory().getDio();
+    dio.interceptors.add(TokenRefreshInterceptor(
+      dio: dio,
       getToken: getToken,
       onTokenRefresh: onTokenRefresh,
       onRefreshFailed: onRefreshFailed,
       headerBuilder: headerBuilder,
-    );
+    ));
+    _instance = ApiServicesImplementation.instanceFor(dio: dio);
   }
 
-  /// Sends a GET request to the specified [endpoint].
+  /// Controls the connectivity check without calling [configure].
   ///
-  /// Parameters:
+  /// Useful when you don't need token auth but are on an internal network where
+  /// the connectivity probe (pinging external hosts) always fails.
   ///
-  /// - `endPoint`: URL endpoint of the API.
-  /// - `data`: Request body data (optional).
-  /// - `params`: Query parameters for the request (optional).
-  /// - `receiveTimeout`: Duration for the receive timeout (optional).
-  /// - `sendTimeout`: Duration for the send timeout (optional).
-  /// - `headers`: Custom headers for the request (optional).
+  /// Set [enabled] to `false` to skip the check; defaults to `true` (check active).
   ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
+  /// **Example:**
+  ///
+  /// ```dart
+  /// // Call before configureDependencies() in your staging entry point.
+  /// ApiServices.setConnectivityCheck(enabled: false);
+  /// ```
+  static void setConnectivityCheck({bool enabled = true}) {
+    _bypassConnectivityCheck = !enabled;
+  }
+
+  /// Sends a GET request to [endpoint].
+  ///
+  /// Use for fetching resources that don't require a request body. Query
+  /// parameters go in [params].
+  ///
+  /// Returns `Right(Response)` on success, `Left(Failure)` on any error
+  /// (network, timeout, 4xx/5xx, no internet).
+  ///
+  /// **Example:**
+  ///
+  /// ```dart
+  /// final result = await _api.get(
+  ///   endpoint: '/users',
+  ///   params: {'page': 1, 'limit': 20},
+  /// );
+  ///
+  /// result.fold(
+  ///   (failure) => emit(ErrorState(failure.message)),
+  ///   (response) => emit(LoadedState(UserListModel.fromJson(response.data))),
+  /// );
+  /// ```
   Future<Either<Failure, Response>> get({
     required String endpoint,
     Object? data,
@@ -68,18 +179,31 @@ abstract interface class ApiServices {
     CancelToken? cancelToken,
   });
 
-  /// Sends a POST request to the specified [endpoint].
+  /// Sends a POST request to [endpoint].
   ///
-  /// Parameters:
+  /// Use for creating resources or submitting forms. Pass the request body
+  /// as [data] (a `Map`, a model's `.toJson()`, or `FormData` for file uploads).
   ///
-  /// - `endPoint`: URL endpoint of the API.
-  /// - `data`: Request body data (optional).
-  /// - `params`: Query parameters for the request (optional).
-  /// - `receiveTimeout`: Duration for the receive timeout (optional).
-  /// - `sendTimeout`: Duration for the send timeout (optional).
-  /// - `headers`: Custom headers for the request (optional).
+  /// **Example:**
   ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
+  /// ```dart
+  /// final result = await _api.post(
+  ///   endpoint: '/auth/login',
+  ///   data: {'email': email, 'password': password},
+  /// );
+  /// ```
+  ///
+  /// **File upload example:**
+  ///
+  /// ```dart
+  /// final result = await _api.post(
+  ///   endpoint: '/upload',
+  ///   data: FormData.fromMap({
+  ///     'file': await MultipartFile.fromFile(filePath),
+  ///   }),
+  ///   onSendProgress: (sent, total) => print('${sent / total * 100}%'),
+  /// );
+  /// ```
   Future<Either<Failure, Response>> post({
     required String endpoint,
     Object? data,
@@ -92,16 +216,19 @@ abstract interface class ApiServices {
     CancelToken? cancelToken,
   });
 
-  /// Sends a PUT request to the specified [endpoint].
+  /// Sends a PUT request to [endpoint].
   ///
-  /// Parameters:
+  /// Use for full replacement of a resource. The request body in [data] should
+  /// contain the complete updated representation.
   ///
-  /// - `endPoint`: URL endpoint of the API.
-  /// - `receiveTimeout`: Duration for the receive timeout (optional).
-  /// - `sendTimeout`: Duration for the send timeout (optional).
-  /// - `headers`: Custom headers for the request (optional).
+  /// **Example:**
   ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
+  /// ```dart
+  /// final result = await _api.put(
+  ///   endpoint: '/users/42',
+  ///   data: updatedUser.toJson(),
+  /// );
+  /// ```
   Future<Either<Failure, Response>> put({
     required String endpoint,
     Object? data,
@@ -114,16 +241,21 @@ abstract interface class ApiServices {
     CancelToken? cancelToken,
   });
 
-  /// Sends a DELETE request to the specified [endpoint].
+  /// Sends a DELETE request to [endpoint].
   ///
-  /// Parameters:
+  /// Use for removing a resource. Some APIs accept a body with delete requests;
+  /// pass it via [data] if needed.
   ///
-  /// `endpoint`: URL endpoint of the API.
-  /// `receiveTimeout`: Duration for the receive timeout (optional).
-  /// `sendTimeout`: Duration for the send timeout (optional).
-  /// `headers`: Custom headers for the request (optional).
+  /// **Example:**
   ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
+  /// ```dart
+  /// final result = await _api.delete(endpoint: '/users/42');
+  ///
+  /// result.fold(
+  ///   (failure) => showError(failure.message),
+  ///   (_) => showSuccess('User deleted'),
+  /// );
+  /// ```
   Future<Either<Failure, Response>> delete({
     required String endpoint,
     Object? data,
@@ -136,16 +268,18 @@ abstract interface class ApiServices {
     CancelToken? cancelToken,
   });
 
-  /// Sends a PATCH request to the specified [endpoint].
+  /// Sends a PATCH request to [endpoint].
   ///
-  /// Parameters:
+  /// Use for partial updates — only send the fields that changed in [data].
   ///
-  /// - `endPoint`: URL endpoint of the API.
-  /// - `receiveTimeout`: Duration for the receive timeout (optional).
-  /// - `sendTimeout`: Duration for the send timeout (optional).
-  /// - `headers`: Custom headers for the request (optional).
+  /// **Example:**
   ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
+  /// ```dart
+  /// final result = await _api.patch(
+  ///   endpoint: '/users/42',
+  ///   data: {'displayName': newName},
+  /// );
+  /// ```
   Future<Either<Failure, Response>> patch({
     required String endpoint,
     Object? data,
@@ -158,81 +292,45 @@ abstract interface class ApiServices {
     CancelToken? cancelToken,
   });
 
-  /// Method to cancel the ongoing request.
+  /// Cancels all in-flight requests.
   ///
-  /// [cancellationReason]: Optional parameter specifying the reason for cancellation.
+  /// Call this when leaving a screen to abort any pending requests that are
+  /// no longer needed (e.g. in `onClose` / `dispose`).
+  ///
+  /// **Example:**
+  ///
+  /// ```dart
+  /// @override
+  /// void onClose() {
+  ///   _api.cancelRequest(cancellationReason: 'Screen closed');
+  ///   super.onClose();
+  /// }
+  /// ```
   void cancelRequest({String cancellationReason = ''});
 }
 
 class ApiServicesImplementation implements ApiServices {
-  late final Dio _dio; // Instance of Dio for making HTTP requests
-  final NetworkInfo _networkInfo = NetworkInfo(); // Network information utility
+  final Dio _dio;
+  final NetworkInfo _networkInfo;
 
-  // Default headers for HTTP requests
   final Map<String, String> _defaultHeader = {
     contentType: applicationJson,
     accept: applicationJson,
   };
 
-  // Define a CancelToken instance
-  CancelToken? _cancelToken;
+  // Tracks every active CancelToken so cancelRequest() can cancel all of them.
+  final Set<CancelToken> _activeTokens = {};
 
-  /// This is a private field that holds the singleton instance of the ApiServices class.
-  static ApiServices? _instance;
-
-  /// This getter provides access to the singleton instance of ApiServices.
-  /// If the _instance field is null, it creates a new instance of ApiServices using the instanceFor factory method,
-  /// and assigns it to the _instance field. It uses a Dio instance from DioFactory().getDio() to initialize the ApiServices instance.
-
-  //coverage:ignore-start
-  static ApiServices instance([Dio? dio]) {
-    _instance ??= ApiServicesImplementation.instanceFor(dio: dio ?? DioFactory().getDio());
-    return _instance!;
-  }
-
-  static void _configure({
-    required Future<String?> Function() getToken,
-    required Future<bool> Function() onTokenRefresh,
-    void Function()? onRefreshFailed,
-    Map<String, String> Function(String token)? headerBuilder,
-  }) {
-    _instance = null;
-    final dio = DioFactory().getDio();
-    dio.interceptors.add(TokenRefreshInterceptor(
-      dio: dio,
-      getToken: getToken,
-      onTokenRefresh: onTokenRefresh,
-      onRefreshFailed: onRefreshFailed,
-      headerBuilder: headerBuilder,
-    ));
-    _instance = ApiServicesImplementation.instanceFor(dio: dio);
-  }
-  //coverage:ignore-end
-
-  /// This is a private constructor for the ApiServices class.
-  /// It accepts a required Dio instance and an optional CancelToken instance as parameters.
-  /// It initializes the _dio and _cancelToken fields with the provided parameters.
-  ApiServicesImplementation._({required Dio dio, CancelToken? cancelToken})
+  ApiServicesImplementation._({required Dio dio, NetworkInfo? networkInfo})
       : _dio = dio,
-        _cancelToken = cancelToken;
+        _networkInfo = networkInfo ?? NetworkInfo();
 
-  /// This factory method creates an instance of ApiServices using the provided Dio and optional CancelToken instances.
-  /// It calls the private constructor to create the new instance.
-  factory ApiServicesImplementation.instanceFor({required Dio dio, CancelToken? cancelToken}) {
-    return ApiServicesImplementation._(dio: dio, cancelToken: cancelToken);
+  factory ApiServicesImplementation.instanceFor({
+    required Dio dio,
+    NetworkInfo? networkInfo,
+  }) {
+    return ApiServicesImplementation._(dio: dio, networkInfo: networkInfo);
   }
-
-  /// Sends an HTTP request with the provided parameters.
-  ///
-  /// [method]: HTTP method (GET, POST, PUT, DELETE, PATCH).
-  /// [endPoint]: URL endpoint of the API.
-  /// [data]: Request body data.
-  /// [params]: Query parameters for the request.
-  /// [receiveTimeout]: Duration for the receive timeout.
-  /// [sendTimeout]: Duration for the send timeout.
-  /// [headers]: Custom headers for the request. If not provided, default headers will be used.
-  ///
-  /// Returns an [Either] containing a [Failure] on error and a [Response] on success.
 
   Future<Either<Failure, Response>> _sendRequest(
     HttpMethod method, {
@@ -246,36 +344,35 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
   }) async {
-    // Check if the device is connected to the internet
-    final isConnected = await _networkInfo.isConnected;
-    if (isConnected) {
-      try {
-        _cancelToken = cancelToken ?? CancelToken();
-        // Send the HTTP request using Dio
-        final response = await _dio.request(
-          endpoint,
-          data: data,
-          queryParameters: params,
-          options: Options(
-            method: method.value,
-            receiveTimeout: receiveTimeout,
-            sendTimeout: sendTimeout,
-            headers: headers ?? _defaultHeader, // Use custom headers if provided, otherwise use default headers
-          ),
-          cancelToken: _cancelToken,
-          onSendProgress: onSendProgress,
-          onReceiveProgress: onReceiveProgress,
-        );
-        // coverage:ignore-start
-        return right(response); // Return successful response
-        // coverage:ignore-end
-      } catch (e) {
-        return left(ErrorHandler.handle(e).failure); // Return failure with error message
+    if (!ApiServices._bypassConnectivityCheck) {
+      final isConnected = await _networkInfo.isConnected;
+      if (!isConnected) {
+        return left(ErrorSource.noInternetConnection.getFailure());
       }
-    } else {
-      // coverage:ignore-start
-      return left(ErrorSource.no_internet_connection.getFailure()); // Return failure for no internet connection
-      // coverage:ignore-end
+    }
+
+    final token = cancelToken ?? CancelToken();
+    _activeTokens.add(token);
+    try {
+      final response = await _dio.request(
+        endpoint,
+        data: data,
+        queryParameters: params,
+        options: Options(
+          method: method.value,
+          receiveTimeout: receiveTimeout,
+          sendTimeout: sendTimeout,
+          headers: headers ?? _defaultHeader,
+        ),
+        cancelToken: token,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+      );
+      return right(response);
+    } catch (e) {
+      return left(ErrorHandler.handle(e).failure);
+    } finally {
+      _activeTokens.remove(token);
     }
   }
 
@@ -290,10 +387,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
-  }) async {
-    // Delegate the request to the _sendRequest method with HTTP method GET
-
-    return await _sendRequest(
+  }) {
+    return _sendRequest(
       HttpMethod.get,
       endpoint: endpoint,
       data: data,
@@ -318,9 +413,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
-  }) async {
-    // Delegate the request to the _sendRequest method with HTTP method POST
-    return await _sendRequest(
+  }) {
+    return _sendRequest(
       HttpMethod.post,
       endpoint: endpoint,
       data: data,
@@ -345,13 +439,12 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
-  }) async {
-    // Delegate the request to the _sendRequest method with HTTP method PUT
-    return await _sendRequest(
+  }) {
+    return _sendRequest(
       HttpMethod.put,
+      endpoint: endpoint,
       data: data,
       params: params,
-      endpoint: endpoint,
       receiveTimeout: receiveTimeout,
       sendTimeout: sendTimeout,
       headers: headers,
@@ -372,13 +465,12 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
-  }) async {
-    // Delegate the request to the _sendRequest method with HTTP method DELETE
-    return await _sendRequest(
+  }) {
+    return _sendRequest(
       HttpMethod.delete,
+      endpoint: endpoint,
       data: data,
       params: params,
-      endpoint: endpoint,
       receiveTimeout: receiveTimeout,
       sendTimeout: sendTimeout,
       headers: headers,
@@ -399,13 +491,12 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
-  }) async {
-    // Delegate the request to the _sendRequest method with HTTP method PATCH
-    return await _sendRequest(
+  }) {
+    return _sendRequest(
       HttpMethod.patch,
+      endpoint: endpoint,
       data: data,
       params: params,
-      endpoint: endpoint,
       receiveTimeout: receiveTimeout,
       sendTimeout: sendTimeout,
       headers: headers,
@@ -417,6 +508,8 @@ class ApiServicesImplementation implements ApiServices {
 
   @override
   void cancelRequest({String cancellationReason = ''}) {
-    _cancelToken?.cancel(cancellationReason); // Provide a cancellation reason
+    for (final token in _activeTokens.toList()) {
+      token.cancel(cancellationReason);
+    }
   }
 }

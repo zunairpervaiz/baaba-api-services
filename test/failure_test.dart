@@ -4,38 +4,32 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Failure', () {
-    test('Constructor creates Failure instance with provided parameters', () {
-      const errorType = ErrorSource.bad_request;
-      const code = ResponseCode.BAD_REQUEST;
-      const message = 'Bad Request';
+    test('constructor stores provided values', () {
+      const failure = Failure(ErrorSource.badRequest, ResponseCode.badRequest, 'Bad Request');
 
-      const failure = Failure(errorType, code, message);
-
-      expect(failure.errorType, equals(errorType));
-      expect(failure.code, equals(code));
-      expect(failure.message, equals(message));
+      expect(failure.errorType, ErrorSource.badRequest);
+      expect(failure.code, ResponseCode.badRequest);
+      expect(failure.message, 'Bad Request');
     });
 
-    test('toString method returns expected string representation', () {
-      const errorType = ErrorSource.internal_server_error;
-      const code = ResponseCode.INTERNAL_SERVER_ERROR;
+    test('toString returns expected representation', () {
+      const errorType = ErrorSource.internalServerError;
+      const code = ResponseCode.internalServerError;
       const message = 'Internal Server Error';
 
       const failure = Failure(errorType, code, message);
 
-      expect(failure.toString(), equals("{errorType: $errorType, code: ${code.value}, message: $message}"));
+      expect(failure.toString(), equals('{errorType: $errorType, code: ${code.value}, message: $message}'));
     });
 
-    test('Equality works correctly', () {
-      const failure1 = Failure(ErrorSource.bad_request, ResponseCode.BAD_REQUEST, 'Bad Request');
-      const failure2 = Failure(ErrorSource.bad_request, ResponseCode.BAD_REQUEST, 'Bad Request');
-      const failure3 = Failure(ErrorSource.not_found, ResponseCode.NOT_FOUND, 'Not Found');
+    test('equality is based on all three fields', () {
+      const f1 = Failure(ErrorSource.badRequest, ResponseCode.badRequest, 'Bad Request');
+      const f2 = Failure(ErrorSource.badRequest, ResponseCode.badRequest, 'Bad Request');
+      const f3 = Failure(ErrorSource.notFound, ResponseCode.notFound, 'Not Found');
 
-      expect(failure1, equals(failure2));
-      expect(failure1.hashCode, equals(failure2.hashCode));
-
-      expect(failure1, isNot(equals(failure3)));
-      expect(failure1.hashCode, isNot(equals(failure3.hashCode)));
+      expect(f1, equals(f2));
+      expect(f1.hashCode, equals(f2.hashCode));
+      expect(f1, isNot(equals(f3)));
     });
   });
 }

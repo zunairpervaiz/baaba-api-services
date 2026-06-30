@@ -12,27 +12,34 @@ class NetworkRetryInterceptor extends Interceptor {
   });
 
   @override
-  Future onError(DioException err, ErrorInterceptorHandler handler) async {
-    // only retry on network timeout or connection lost errors
-    if (_shouldRetry(err)) {
-      int attempt = err.requestOptions.extra['networkRetryCount'] ?? 0;
-
-      if (attempt < maxRetries) {
-        attempt++;
-        err.requestOptions.extra['networkRetryCount'] = attempt;
-
-        //backoff delay
-        await Future.delayed(retryInterval * attempt);
-
-        try {
-          final response = await dio.fetch(err.requestOptions);
-          return handler.resolve(response);
-        } on DioException catch (e) {
-          return super.onError(e, handler);
-        }
-      }
+  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+    if (!_shouldRetry(err)) {
+      return handler.next(err);
     }
-    return super.onError(err, handler);
+
+    int attempt = err.requestOptions.extra['networkRetryCount'] ?? 0;
+    if (attempt >= maxRetries) {
+      return handler.next(err);
+    }
+
+    attempt++;
+    err.requestOptions.extra['networkRetryCount'] = attempt;
+    await Future.delayed(retryInterval * attempt);
+
+    try {
+      final response = await dio.fetch(err.requestOptions);
+      return handler.resolve(response);
+    } catch (e) {
+      return handler.next(
+        e is DioException
+            ? e
+            : DioException(
+                requestOptions: err.requestOptions,
+                error: e,
+                type: DioExceptionType.unknown,
+              ),
+      );
+    }
   }
 
   bool _shouldRetry(DioException err) {

@@ -1,159 +1,61 @@
-// ignore_for_file: constant_identifier_names
-
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 
-/// Enumeration representing various response codes and corresponding error states.
 enum ResponseCode {
-  SUCCESS,
-  CREATED,
-  NO_CONTENT,
-  BAD_REQUEST,
-  UNAUTHORIZED,
-  FORBIDDEN,
-  NOT_FOUND,
-  REQUEST_TIMEOUT,
-  CONFLICT,
-  UNPROCESSABLE_ENTITY,
-  TOO_MANY_REQUESTS,
-  INTERNAL_SERVER_ERROR,
-  BAD_GATEWAY,
-  SERVICE_NOT_AVAILABLE,
-  CONNECT_TIMEOUT,
-  CANCEL,
-  RECEIVE_TIMEOUT,
-  SEND_TIMEOUT,
-  CACHE_ERROR,
-  NO_INTERNET_CONNECTION,
-  DEFAULT,
-  CONNECTION_FAILURE,
+  success(200),
+  created(201),
+  noContent(204),
+  badRequest(400),
+  unauthorized(401),
+  forbidden(403),
+  notFound(404),
+  requestTimeout(408),
+  conflict(409),
+  unprocessableEntity(422),
+  tooManyRequests(429),
+  internalServerError(500),
+  badGateway(502),
+  serviceNotAvailable(503),
+  connectTimeout(-1),
+  cancel(-2),
+  receiveTimeout(-3),
+  sendTimeout(-4),
+  cacheError(-5),
+  noInternetConnection(-6),
+  defaultError(-7),
+  connectionFailure(-8);
+
+  const ResponseCode(this.value);
+  final int value;
 }
 
-/// An extension on the [ResponseCode] enum to provide an integer value for each response code.
-extension ResponseCodeExtension on ResponseCode {
-  int get value {
-    switch (this) {
-      case ResponseCode.SUCCESS:
-        return 200;
-      case ResponseCode.CREATED:
-        return 201;
-      case ResponseCode.NO_CONTENT:
-        return 204;
-      case ResponseCode.BAD_REQUEST:
-        return 400;
-      case ResponseCode.UNAUTHORIZED:
-        return 401;
-      case ResponseCode.FORBIDDEN:
-        return 403;
-      case ResponseCode.INTERNAL_SERVER_ERROR:
-        return 500;
-      case ResponseCode.SERVICE_NOT_AVAILABLE:
-        return 503;
-      case ResponseCode.NOT_FOUND:
-        return 404;
-      case ResponseCode.REQUEST_TIMEOUT:
-        return 408;
-      case ResponseCode.CONFLICT:
-        return 409;
-      case ResponseCode.UNPROCESSABLE_ENTITY:
-        return 422;
-      case ResponseCode.TOO_MANY_REQUESTS:
-        return 429;
-      case ResponseCode.BAD_GATEWAY:
-        return 502;
-      case ResponseCode.CONNECT_TIMEOUT:
-        return -1;
-      case ResponseCode.CANCEL:
-        return -2;
-      case ResponseCode.RECEIVE_TIMEOUT:
-        return -3;
-      case ResponseCode.SEND_TIMEOUT:
-        return -4;
-      case ResponseCode.CACHE_ERROR:
-        return -5;
-      case ResponseCode.NO_INTERNET_CONNECTION:
-        return -6;
-      case ResponseCode.DEFAULT:
-        return -7;
-      case ResponseCode.CONNECTION_FAILURE:
-        return -8;
-    }
-  }
-}
+final _statusCodeMap = Map<int, ResponseCode>.unmodifiable({
+  for (final rc in ResponseCode.values) rc.value: rc,
+});
 
-/// Maps an integer status code to a [ResponseCode] enum constant.
-ResponseCode mapStatusCodeToEnum(int statusCode) {
-  switch (statusCode) {
-    case 200:
-      return ResponseCode.SUCCESS;
-    case 201:
-      return ResponseCode.CREATED;
-    case 204:
-      return ResponseCode.NO_CONTENT;
-    case 400:
-      return ResponseCode.BAD_REQUEST;
-    case 401:
-      return ResponseCode.UNAUTHORIZED;
-    case 403:
-      return ResponseCode.FORBIDDEN;
-    case 404:
-      return ResponseCode.NOT_FOUND;
-    case 408:
-      return ResponseCode.REQUEST_TIMEOUT;
-    case 409:
-      return ResponseCode.CONFLICT;
-    case 422:
-      return ResponseCode.UNPROCESSABLE_ENTITY;
-    case 429:
-      return ResponseCode.TOO_MANY_REQUESTS;
-    case 502:
-      return ResponseCode.BAD_GATEWAY;
-    case 500:
-      return ResponseCode.INTERNAL_SERVER_ERROR;
-    case 503:
-      return ResponseCode.SERVICE_NOT_AVAILABLE;
-    case -1:
-      return ResponseCode.CONNECT_TIMEOUT;
-    case -2:
-      return ResponseCode.CANCEL;
-    case -3:
-      return ResponseCode.RECEIVE_TIMEOUT;
-    case -4:
-      return ResponseCode.SEND_TIMEOUT;
-    case -5:
-      return ResponseCode.CACHE_ERROR;
-    case -6:
-      return ResponseCode.NO_INTERNET_CONNECTION;
-    case -7:
-      return ResponseCode.DEFAULT;
-    case -8:
-      return ResponseCode.CONNECTION_FAILURE;
-
-    default:
-      return ResponseCode.DEFAULT;
-  }
-}
+ResponseCode mapStatusCodeToEnum(int statusCode) =>
+    _statusCodeMap[statusCode] ?? ResponseCode.defaultError;
 
 ErrorSource mapResponseCodeToEnum(ResponseCode code) => switch (code) {
-      ResponseCode.SUCCESS => ErrorSource.success,
-      ResponseCode.CREATED => ErrorSource.created,
-      ResponseCode.NO_CONTENT => ErrorSource.no_content,
-      ResponseCode.BAD_REQUEST => ErrorSource.bad_request,
-      ResponseCode.UNAUTHORIZED => ErrorSource.unauthorised,
-      ResponseCode.FORBIDDEN => ErrorSource.forbidden,
-      ResponseCode.INTERNAL_SERVER_ERROR => ErrorSource.internal_server_error,
-      ResponseCode.NOT_FOUND => ErrorSource.not_found,
-      ResponseCode.REQUEST_TIMEOUT => ErrorSource.request_timeout,
-      ResponseCode.CONFLICT => ErrorSource.conflict,
-      ResponseCode.UNPROCESSABLE_ENTITY => ErrorSource.unprocessable_entity,
-      ResponseCode.TOO_MANY_REQUESTS => ErrorSource.too_many_requests,
-      ResponseCode.BAD_GATEWAY => ErrorSource.bad_gateway,
-      ResponseCode.CONNECT_TIMEOUT => ErrorSource.connection_timeout,
-      ResponseCode.CANCEL => ErrorSource.cancel,
-      ResponseCode.RECEIVE_TIMEOUT => ErrorSource.receive_timeout,
-      ResponseCode.SEND_TIMEOUT => ErrorSource.send_timeout,
-      ResponseCode.CACHE_ERROR => ErrorSource.cache_error,
-      ResponseCode.NO_INTERNET_CONNECTION => ErrorSource.no_internet_connection,
-      ResponseCode.SERVICE_NOT_AVAILABLE => ErrorSource.service_not_available,
-      ResponseCode.DEFAULT => ErrorSource.default_error,
-      ResponseCode.CONNECTION_FAILURE => ErrorSource.connection_failure,
+      ResponseCode.success => ErrorSource.success,
+      ResponseCode.created => ErrorSource.created,
+      ResponseCode.noContent => ErrorSource.noContent,
+      ResponseCode.badRequest => ErrorSource.badRequest,
+      ResponseCode.unauthorized => ErrorSource.unauthorized,
+      ResponseCode.forbidden => ErrorSource.forbidden,
+      ResponseCode.internalServerError => ErrorSource.internalServerError,
+      ResponseCode.notFound => ErrorSource.notFound,
+      ResponseCode.requestTimeout => ErrorSource.requestTimeout,
+      ResponseCode.conflict => ErrorSource.conflict,
+      ResponseCode.unprocessableEntity => ErrorSource.unprocessableEntity,
+      ResponseCode.tooManyRequests => ErrorSource.tooManyRequests,
+      ResponseCode.badGateway => ErrorSource.badGateway,
+      ResponseCode.connectTimeout => ErrorSource.connectionTimeout,
+      ResponseCode.cancel => ErrorSource.cancel,
+      ResponseCode.receiveTimeout => ErrorSource.receiveTimeout,
+      ResponseCode.sendTimeout => ErrorSource.sendTimeout,
+      ResponseCode.cacheError => ErrorSource.cacheError,
+      ResponseCode.noInternetConnection => ErrorSource.noInternetConnection,
+      ResponseCode.serviceNotAvailable => ErrorSource.serviceNotAvailable,
+      ResponseCode.defaultError => ErrorSource.defaultError,
+      ResponseCode.connectionFailure => ErrorSource.connectionFailure,
     };

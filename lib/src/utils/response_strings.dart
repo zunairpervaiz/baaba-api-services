@@ -1,26 +1,24 @@
 class ResponseStrings {
-  // String constant for "success".
-  static const String success = "success";
-
-  // error handler
-  static const String strBadRequestError = "bad_request_error";
-  static const String strCreated = "created";
-  static const String strNoContent = "no_content";
-  static const String strForbiddenError = "forbidden_error";
-  static const String strUnauthorizedError = "unauthorized_error";
-  static const String strNotFoundError = "not_found_error";
-  static const String strConflictError = "conflict_error";
-  static const String strInternalServerError = "internal_server_error";
-  static const String strTooManyRequestsError = "too_many_requests_error";
-  static const String strRequestTimeoutError = "request_timeout_error";
-  static const String strUnprocessableEntityError = "unprocessable_entity_error";
-  static const String strBadGatewayError = "bad_gateway_error";
-  static const String strUnknownError = "unknown_error";
-  static const String strTimeoutError = "timeout_error";
-  static const String strDefaultError = "unknown_error";
-  static const String strCancelError = "cancel_error";
-  static const String strCacheError = "cache_error";
-  static const String strNoInternetError = "no_internet_error";
-  static const String strConnectionFailureError = "connection_failure_error";
-  static const String strServiceNotAvailableError = "service_not_available_error";
+  static const String success = 'Success.';
+  static const String created = 'Resource created successfully.';
+  static const String noContent = 'No content returned.';
+  static const String badRequest = 'The request was invalid. Please check your input.';
+  static const String unauthorized = 'Authentication required. Please log in again.';
+  static const String forbidden = 'You do not have permission to access this resource.';
+  static const String notFound = 'The requested resource was not found.';
+  static const String requestTimeout = 'The request timed out. Please try again.';
+  static const String conflict = 'A conflict occurred. Please try again.';
+  static const String unprocessableEntity = 'The request could not be processed. Please check your input.';
+  static const String tooManyRequests = 'Too many requests. Please slow down and try again.';
+  static const String internalServerError = 'A server error occurred. Please try again later.';
+  static const String badGateway = 'Bad gateway. Please try again later.';
+  static const String serviceNotAvailable = 'Service temporarily unavailable. Please try again later.';
+  static const String connectTimeout = 'Connection timed out. Please check your network.';
+  static const String receiveTimeout = 'The server took too long to respond. Please try again.';
+  static const String sendTimeout = 'The request took too long to send. Please try again.';
+  static const String cancel = 'The request was cancelled.';
+  static const String cacheError = 'Failed to read from cache.';
+  static const String noInternetConnection = 'No internet connection. Please check your network.';
+  static const String connectionFailure = 'Failed to connect to the server. Please try again.';
+  static const String defaultError = 'An unexpected error occurred. Please try again.';
 }
