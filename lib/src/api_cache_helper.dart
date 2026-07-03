@@ -11,7 +11,8 @@ abstract interface class ApiCacheHelper {
   /// Return the existing or newly created instance.
   //coverage:ignore-start
   static ApiCacheHelper get instance {
-    _instance ??= ApiCacheHelperImplementation.instanceFor(apiCacheManager: APICacheManager());
+    _instance ??= ApiCacheHelperImplementation.instanceFor(
+        apiCacheManager: APICacheManager());
     return _instance!;
   }
 
@@ -66,19 +67,22 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
   /// Return the existing or newly created instance.
   //coverage:ignore-start
   static ApiCacheHelperImplementation get instance {
-    _instance ??= ApiCacheHelperImplementation.instanceFor(apiCacheManager: APICacheManager());
+    _instance ??= ApiCacheHelperImplementation.instanceFor(
+        apiCacheManager: APICacheManager());
     return _instance!;
   }
   //coverage:ignore-end
 
   /// Private constructor for creating an instance of ApiCacheHelper with a given API Cache Manager.
   /// The provided apiCacheManager is stored in the _apiCacheManager field.
-  ApiCacheHelperImplementation._({required APICacheManager apiCacheManager}) : _apiCacheManager = apiCacheManager;
+  ApiCacheHelperImplementation._({required APICacheManager apiCacheManager})
+      : _apiCacheManager = apiCacheManager;
 
   // Factory constructor for creating an instance of ApiCacheHelper with a given API Cache Manager.
   // This provides an easier way to create an instance using a custom API Cache Manager.
   // Returns a new instance of ApiCacheHelper with the provided apiCacheManager.
-  factory ApiCacheHelperImplementation.instanceFor({required APICacheManager apiCacheManager}) {
+  factory ApiCacheHelperImplementation.instanceFor(
+      {required APICacheManager apiCacheManager}) {
     return ApiCacheHelperImplementation._(apiCacheManager: apiCacheManager);
   }
 

@@ -12,7 +12,8 @@ class NetworkRetryInterceptor extends Interceptor {
   });
 
   @override
-  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+  Future<void> onError(
+      DioException err, ErrorInterceptorHandler handler) async {
     if (!_shouldRetry(err)) {
       return handler.next(err);
     }

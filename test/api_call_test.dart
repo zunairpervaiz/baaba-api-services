@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:baaba_api_handler/src/api_service.dart';
 import 'package:baaba_api_handler/src/utils/network_info.dart';
 import 'package:baaba_api_handler/src/utils/response_code.dart';
@@ -108,6 +110,122 @@ void runApiTestCases() {
         (f) => expect(f.errorType, ErrorSource.connectionTimeout),
         (_) => fail('Expected failure'),
       );
+    });
+  });
+
+  group('configureLoader', () {
+    late MockDio mockDio;
+    late MockNetworkInfo mockNetworkInfo;
+    late ApiServicesImplementation apiServices;
+    late List<String> events;
+
+    final successResponse = Response(
+      requestOptions: RequestOptions(path: ''),
+      statusCode: 200,
+    );
+
+    setUp(() {
+      mockDio = MockDio();
+      mockNetworkInfo = MockNetworkInfo();
+      events = [];
+
+      registerFallbackValue(RequestOptions(path: ''));
+      registerFallbackValue(Options());
+
+      when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => true);
+
+      apiServices = ApiServicesImplementation.instanceFor(
+        dio: mockDio,
+        networkInfo: mockNetworkInfo,
+      );
+
+      ApiServices.configureLoader(
+        onShow: () => events.add('show'),
+        onHide: () => events.add('hide'),
+      );
+    });
+
+    test('shows and hides the loader around a successful request', () async {
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenAnswer((_) async => successResponse);
+
+      await apiServices.get(endpoint: '/users');
+
+      expect(events, ['show', 'hide']);
+    });
+
+    test('shows and hides the loader when the request throws', () async {
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenThrow(DioException(
+        requestOptions: RequestOptions(path: ''),
+        type: DioExceptionType.connectionTimeout,
+      ));
+
+      await apiServices.get(endpoint: '/users');
+
+      expect(events, ['show', 'hide']);
+    });
+
+    test('shows and hides the loader when offline', () async {
+      when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => false);
+
+      await apiServices.get(endpoint: '/users');
+
+      expect(events, ['show', 'hide']);
+    });
+
+    test('skips the loader when showLoader is false', () async {
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenAnswer((_) async => successResponse);
+
+      await apiServices.get(endpoint: '/users', showLoader: false);
+
+      expect(events, isEmpty);
+    });
+
+    test('shows once and hides once for two concurrent requests', () async {
+      final completer = Completer<Response>();
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenAnswer((_) => completer.future);
+
+      final first = apiServices.get(endpoint: '/users');
+      final second = apiServices.get(endpoint: '/orders');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(events, ['show']);
+
+      completer.complete(successResponse);
+      await Future.wait([first, second]);
+
+      expect(events, ['show', 'hide']);
     });
   });
 

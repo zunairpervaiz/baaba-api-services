@@ -1,4 +1,3 @@
-import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:baaba_api_handler/ts_api_handler.dart';
 import 'package:flutter_test/flutter_test.dart';
 

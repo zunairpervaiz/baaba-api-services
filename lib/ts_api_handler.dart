@@ -1,6 +1,7 @@
 library;
 
-export 'package:api_cache_manager/models/cache_db_model.dart' show APICacheDBModel;
+export 'package:api_cache_manager/models/cache_db_model.dart'
+    show APICacheDBModel;
 export 'package:dio/dio.dart' show CancelToken, Response;
 
 export 'src/api_cache_helper.dart' show ApiCacheHelper;

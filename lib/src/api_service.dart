@@ -53,6 +53,8 @@ import 'package:fpdart/fpdart.dart';
 abstract interface class ApiServices {
   static ApiServices? _instance;
   static bool _bypassConnectivityCheck = false;
+  static void Function()? _onLoadingShow;
+  static void Function()? _onLoadingHide;
 
   /// Returns the singleton instance.
   ///
@@ -146,6 +148,42 @@ abstract interface class ApiServices {
     _bypassConnectivityCheck = !enabled;
   }
 
+  /// Configures a global loading indicator shown automatically around every
+  /// request, so callers don't need to manage an `isLoading` flag per screen.
+  ///
+  /// [onShow] and [onHide] are plain callbacks — this package has no opinion
+  /// on how the indicator is presented. Wire them to whatever your app uses:
+  ///
+  /// ```dart
+  /// // GetX
+  /// ApiServices.configureLoader(
+  ///   onShow: () => Get.dialog(const LoadingDialog(), barrierDismissible: false),
+  ///   onHide: () => Get.back(),
+  /// );
+  ///
+  /// // Navigator with a global key
+  /// ApiServices.configureLoader(
+  ///   onShow: () => showDialog(
+  ///     context: navigatorKey.currentContext!,
+  ///     barrierDismissible: false,
+  ///     builder: (_) => const LoadingDialog(),
+  ///   ),
+  ///   onHide: () => navigatorKey.currentState!.pop(),
+  /// );
+  /// ```
+  ///
+  /// Concurrent requests share one indicator: [onShow] fires only when the
+  /// first request starts, [onHide] only once every in-flight request
+  /// (success, failure, or exception) has finished. Pass `showLoader: false`
+  /// to an individual request to opt it out (e.g. background polling).
+  static void configureLoader({
+    required void Function() onShow,
+    required void Function() onHide,
+  }) {
+    _onLoadingShow = onShow;
+    _onLoadingHide = onHide;
+  }
+
   /// Sends a GET request to [endpoint].
   ///
   /// Use for fetching resources that don't require a request body. Query
@@ -177,6 +215,7 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   });
 
   /// Sends a POST request to [endpoint].
@@ -214,6 +253,7 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   });
 
   /// Sends a PUT request to [endpoint].
@@ -239,6 +279,7 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   });
 
   /// Sends a DELETE request to [endpoint].
@@ -266,6 +307,7 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   });
 
   /// Sends a PATCH request to [endpoint].
@@ -290,6 +332,7 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   });
 
   /// Cancels all in-flight requests.
@@ -321,6 +364,10 @@ class ApiServicesImplementation implements ApiServices {
   // Tracks every active CancelToken so cancelRequest() can cancel all of them.
   final Set<CancelToken> _activeTokens = {};
 
+  // Reference-counted so concurrent requests share one indicator: onShow
+  // fires only for the first in-flight request, onHide only once none remain.
+  int _activeLoadingCount = 0;
+
   ApiServicesImplementation._({required Dio dio, NetworkInfo? networkInfo})
       : _dio = dio,
         _networkInfo = networkInfo ?? NetworkInfo();
@@ -343,36 +390,56 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   }) async {
-    if (!ApiServices._bypassConnectivityCheck) {
-      final isConnected = await _networkInfo.isConnected;
-      if (!isConnected) {
-        return left(ErrorSource.noInternetConnection.getFailure());
-      }
-    }
-
-    final token = cancelToken ?? CancelToken();
-    _activeTokens.add(token);
+    if (showLoader) _showLoader();
     try {
-      final response = await _dio.request(
-        endpoint,
-        data: data,
-        queryParameters: params,
-        options: Options(
-          method: method.value,
-          receiveTimeout: receiveTimeout,
-          sendTimeout: sendTimeout,
-          headers: headers ?? _defaultHeader,
-        ),
-        cancelToken: token,
-        onSendProgress: onSendProgress,
-        onReceiveProgress: onReceiveProgress,
-      );
-      return right(response);
-    } catch (e) {
-      return left(ErrorHandler.handle(e).failure);
+      if (!ApiServices._bypassConnectivityCheck) {
+        final isConnected = await _networkInfo.isConnected;
+        if (!isConnected) {
+          return left(ErrorSource.noInternetConnection.getFailure());
+        }
+      }
+
+      final token = cancelToken ?? CancelToken();
+      _activeTokens.add(token);
+      try {
+        final response = await _dio.request(
+          endpoint,
+          data: data,
+          queryParameters: params,
+          options: Options(
+            method: method.value,
+            receiveTimeout: receiveTimeout,
+            sendTimeout: sendTimeout,
+            headers: headers ?? _defaultHeader,
+          ),
+          cancelToken: token,
+          onSendProgress: onSendProgress,
+          onReceiveProgress: onReceiveProgress,
+        );
+        return right(response);
+      } catch (e) {
+        return left(ErrorHandler.handle(e).failure);
+      } finally {
+        _activeTokens.remove(token);
+      }
     } finally {
-      _activeTokens.remove(token);
+      if (showLoader) _hideLoader();
+    }
+  }
+
+  void _showLoader() {
+    _activeLoadingCount++;
+    if (_activeLoadingCount == 1) {
+      ApiServices._onLoadingShow?.call();
+    }
+  }
+
+  void _hideLoader() {
+    _activeLoadingCount--;
+    if (_activeLoadingCount == 0) {
+      ApiServices._onLoadingHide?.call();
     }
   }
 
@@ -387,6 +454,7 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   }) {
     return _sendRequest(
       HttpMethod.get,
@@ -399,6 +467,7 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      showLoader: showLoader,
     );
   }
 
@@ -413,6 +482,7 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   }) {
     return _sendRequest(
       HttpMethod.post,
@@ -425,6 +495,7 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      showLoader: showLoader,
     );
   }
 
@@ -439,6 +510,7 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   }) {
     return _sendRequest(
       HttpMethod.put,
@@ -451,6 +523,7 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      showLoader: showLoader,
     );
   }
 
@@ -465,6 +538,7 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   }) {
     return _sendRequest(
       HttpMethod.delete,
@@ -477,6 +551,7 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      showLoader: showLoader,
     );
   }
 
@@ -491,6 +566,7 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
   }) {
     return _sendRequest(
       HttpMethod.patch,
@@ -503,6 +579,7 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      showLoader: showLoader,
     );
   }
 

@@ -29,7 +29,7 @@ flutter pub get
 
 Re-exports only: `ApiServices`, `ApiCacheHelper`, `ErrorSource`, `Failure`, `ResponseCode`, and pass-through types `APICacheDBModel`, `CancelToken`, `Response`.
 
-Current version: **1.1.0**
+Current version: **1.2.0**
 
 ### Request lifecycle
 
@@ -69,6 +69,10 @@ The interceptor is only added to Dio when `configure()` has been called. Without
 ### Request cancellation
 
 `ApiServicesImplementation` tracks every active `CancelToken` in a `_activeTokens: Set<CancelToken>`. `cancelRequest()` cancels all of them, not just one. Tokens are removed from the set in `_sendRequest`'s `finally` block.
+
+### Loading indicator
+
+`ApiServices.configureLoader({onShow, onHide})` registers a global, framework-agnostic loading indicator. `_sendRequest` wraps its entire body (connectivity check, request, error handling) in a `try/finally` that calls `_showLoader()`/`_hideLoader()` on `ApiServicesImplementation`, so `onShow`/`onHide` fire around success, `Failure`, and thrown exceptions alike. Calls are reference-counted via `_activeLoadingCount` so concurrent requests share one indicator (`onShow` only on the 0→1 transition, `onHide` only on 1→0). Each HTTP method takes a `showLoader` parameter (default `true`) to opt a specific request out. The package has no UI dependency — `onShow`/`onHide` are plain closures the consumer wires to their own dialog (e.g. `Get.dialog`/`Get.back` for GetX).
 
 ### Error model
 
