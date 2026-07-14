@@ -58,6 +58,50 @@ void runApiCacheTests() {
       expect(cacheExistsAfter, true);
     });
 
+    test("getCacheData - returns fresh data when within maxAge", () async {
+      final freshData = APICacheDBModel(
+        key: url,
+        syncData: data,
+        syncTime: DateTime.now()
+            .subtract(const Duration(minutes: 1))
+            .millisecondsSinceEpoch,
+      );
+      when(() => mockApiCacheManager.getCacheData(cacheKey))
+          .thenAnswer((invocation) async => freshData);
+
+      final result = await cacheHelper.getCacheData(
+        url,
+        maxAge: const Duration(minutes: 5),
+      );
+
+      expect(result, freshData);
+      verifyNever(() => mockApiCacheManager.deleteCache(cacheKey));
+    });
+
+    test(
+        "getCacheData - returns null and clears the entry when older than maxAge",
+        () async {
+      final staleData = APICacheDBModel(
+        key: url,
+        syncData: data,
+        syncTime: DateTime.now()
+            .subtract(const Duration(minutes: 10))
+            .millisecondsSinceEpoch,
+      );
+      when(() => mockApiCacheManager.getCacheData(cacheKey))
+          .thenAnswer((invocation) async => staleData);
+      when(() => mockApiCacheManager.deleteCache(cacheKey))
+          .thenAnswer((invocation) async => true);
+
+      final result = await cacheHelper.getCacheData(
+        url,
+        maxAge: const Duration(minutes: 5),
+      );
+
+      expect(result, isNull);
+      verify(() => mockApiCacheManager.deleteCache(cacheKey)).called(1);
+    });
+
     test("clearCache - Test cache clearing", () async {
       when(() => mockApiCacheManager.deleteCache(cacheKey))
           .thenAnswer((invocation) async => true);

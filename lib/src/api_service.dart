@@ -94,6 +94,10 @@ abstract interface class ApiServices {
   ///   connectivity probes fail because of proxies or firewalls.
   ///   See also [setConnectivityCheck].
   ///
+  /// - [refreshTimeout] — how long a request that 401s while another refresh
+  ///   is already in flight will wait for that refresh before giving up and
+  ///   failing with the original error. Defaults to 30 seconds.
+  ///
   /// **Example:**
   ///
   /// ```dart
@@ -118,6 +122,7 @@ abstract interface class ApiServices {
     void Function()? onRefreshFailed,
     Map<String, String> Function(String token)? headerBuilder,
     bool bypassConnectivityCheck = false,
+    Duration refreshTimeout = const Duration(seconds: 30),
   }) {
     _bypassConnectivityCheck = bypassConnectivityCheck;
     final dio = DioFactory().getDio();
@@ -127,6 +132,7 @@ abstract interface class ApiServices {
       onTokenRefresh: onTokenRefresh,
       onRefreshFailed: onRefreshFailed,
       headerBuilder: headerBuilder,
+      refreshTimeout: refreshTimeout,
     ));
     _instance = ApiServicesImplementation.instanceFor(dio: dio);
   }
@@ -332,6 +338,39 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    bool showLoader = true,
+  });
+
+  /// Downloads the file at [endpoint] and streams it directly to [savePath],
+  /// instead of loading the whole response into memory like [get] would.
+  ///
+  /// Use for images, PDFs, exports, or any file response.
+  ///
+  /// **Example:**
+  ///
+  /// ```dart
+  /// final dir = await getApplicationDocumentsDirectory();
+  /// final result = await _api.download(
+  ///   endpoint: '/files/report.pdf',
+  ///   savePath: '${dir.path}/report.pdf',
+  ///   onReceiveProgress: (received, total) => print('${received / total * 100}%'),
+  /// );
+  ///
+  /// result.fold(
+  ///   (failure) => showError(failure.message),
+  ///   (_) => openFile(savePath),
+  /// );
+  /// ```
+  Future<Either<Failure, Response>> download({
+    required String endpoint,
+    required String savePath,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    ProgressCallback? onReceiveProgress,
+    CancelToken? cancelToken,
+    bool deleteOnError = true,
     bool showLoader = true,
   });
 
@@ -581,6 +620,55 @@ class ApiServicesImplementation implements ApiServices {
       cancelToken: cancelToken,
       showLoader: showLoader,
     );
+  }
+
+  @override
+  Future<Either<Failure, Response>> download({
+    required String endpoint,
+    required String savePath,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    ProgressCallback? onReceiveProgress,
+    CancelToken? cancelToken,
+    bool deleteOnError = true,
+    bool showLoader = true,
+  }) async {
+    if (showLoader) _showLoader();
+    try {
+      if (!ApiServices._bypassConnectivityCheck) {
+        final isConnected = await _networkInfo.isConnected;
+        if (!isConnected) {
+          return left(ErrorSource.noInternetConnection.getFailure());
+        }
+      }
+
+      final token = cancelToken ?? CancelToken();
+      _activeTokens.add(token);
+      try {
+        final response = await _dio.download(
+          endpoint,
+          savePath,
+          queryParameters: params,
+          options: Options(
+            receiveTimeout: receiveTimeout,
+            sendTimeout: sendTimeout,
+            headers: headers ?? _defaultHeader,
+          ),
+          cancelToken: token,
+          onReceiveProgress: onReceiveProgress,
+          deleteOnError: deleteOnError,
+        );
+        return right(response);
+      } catch (e) {
+        return left(ErrorHandler.handle(e).failure);
+      } finally {
+        _activeTokens.remove(token);
+      }
+    } finally {
+      if (showLoader) _hideLoader();
+    }
   }
 
   @override

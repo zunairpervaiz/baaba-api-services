@@ -29,16 +29,16 @@ flutter pub get
 
 Re-exports only: `ApiServices`, `ApiCacheHelper`, `ErrorSource`, `Failure`, `ResponseCode`, and pass-through types `APICacheDBModel`, `CancelToken`, `Response`.
 
-Current version: **1.2.0**
+Current version: **1.3.0**
 
 ### Request lifecycle
 
 ```
-ApiServices.instance().get/post/put/patch/delete(endpoint, ...)
+ApiServices.instance().get/post/put/patch/delete/download(endpoint, ...)
   → connectivity check via NetworkInfo (fails fast with no_internet_connection)
-  → Dio.request() through interceptors:
+  → Dio.request()/Dio.download() through interceptors:
       1. TokenRefreshInterceptor  — attaches token header on every request; retries on 401
-      2. NetworkRetryInterceptor  — retries transient timeouts/connection errors (max 3, exponential backoff)
+      2. NetworkRetryInterceptor  — retries transient timeouts/connection errors on idempotent methods only (max 3, exponential backoff)
       3. PrettyDioLogger          — debug builds only
   → Response or DioException
   → ErrorHandler.handle()        — converts DioException → Failure
@@ -46,6 +46,10 @@ ApiServices.instance().get/post/put/patch/delete(endpoint, ...)
 ```
 
 All HTTP methods return `Either<Failure, Response>` (fpdart). Callers use `.fold(onLeft, onRight)` — there are no thrown exceptions crossing the API boundary.
+
+`download({endpoint, savePath, ...})` streams the response body directly to `savePath` instead of loading it into memory, for images/PDFs/exports. It shares the connectivity check, `CancelToken` tracking, and loader plumbing with the other methods but bypasses `TokenRefreshInterceptor`/`NetworkRetryInterceptor` retry semantics that assume a buffered response — see `ApiServicesImplementation.download` in `src/api_service.dart`.
+
+`NetworkRetryInterceptor` only retries `GET`/`HEAD`/`OPTIONS`/`PUT`/`DELETE`. `POST`/`PATCH` are never auto-retried — the server may have already processed the request before the timeout, and a blind retry could duplicate the side effect (e.g. creating the same order twice).
 
 ### Connectivity check
 
@@ -60,9 +64,11 @@ Useful in staging/internal environments where the connectivity probe pings exter
 
 Stateful interceptor configured once via `ApiServices.configure(...)`. On 401:
 1. Checks `request.extra['_tokenRetried']` to prevent infinite loops.
-2. Guards concurrent refreshes with `_isRefreshing` + `Completer<bool>`.
+2. Guards concurrent refreshes with `_isRefreshing` + `Completer<bool>`. If a refresh is already in flight, the request awaits that same `Completer` (bounded by `refreshTimeout`, default 30s) and retries once it resolves, instead of failing immediately — so a burst of concurrent 401s (e.g. right as the token expires) all succeed off one refresh rather than only the first.
 3. Calls the consumer-supplied `onTokenRefresh()` callback; on success, fetches fresh token via `getToken()`, rebuilds headers, and retries the original request.
 4. Calls `onRefreshFailed()` (e.g. logout) if refresh fails.
+
+`refreshTimeout` exists to avoid a deadlock in the pathological case where the refresh endpoint itself 401s (refresh token expired) — that inner call is queued behind the very refresh it's part of, so it needs a bound to give up and surface the original error.
 
 The interceptor is only added to Dio when `configure()` has been called. Without it, 401 errors surface as a `Failure` like any other HTTP error.
 
@@ -85,6 +91,8 @@ When the server returns a JSON body, `ErrorHandler` extracts the `message` or `e
 ### Caching
 
 `ApiCacheHelper` is a thin wrapper around `APICacheManager` (SQLite-backed). The cache key is `"api_cache_" + url`. Nothing in `ApiServices` touches the cache automatically — callers must call `ApiCacheHelper.instance` themselves before or after requests.
+
+`getCacheData(url, {maxAge})` takes an optional freshness window: if the cached entry is older than `maxAge`, it's deleted and `null` is returned instead of stale data. Omit `maxAge` to get cached data regardless of age (unchanged default behavior).
 
 ### Singleton lifecycle
 

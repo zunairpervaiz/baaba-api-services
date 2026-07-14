@@ -1,6 +1,18 @@
 import 'package:dio/dio.dart';
 
 class NetworkRetryInterceptor extends Interceptor {
+  // GET/HEAD/OPTIONS/PUT/DELETE are safe to retry blindly — repeating them has
+  // the same effect as the original call. POST/PATCH are not: if the server
+  // already processed the request before the timeout, an automatic retry can
+  // duplicate the side effect (e.g. creating the same order twice).
+  static const Set<String> _idempotentMethods = {
+    'GET',
+    'HEAD',
+    'OPTIONS',
+    'PUT',
+    'DELETE',
+  };
+
   final Dio dio;
   final int maxRetries;
   final Duration retryInterval;
@@ -44,9 +56,14 @@ class NetworkRetryInterceptor extends Interceptor {
   }
 
   bool _shouldRetry(DioException err) {
-    return err.type == DioExceptionType.connectionTimeout ||
+    final isTransientError = err.type == DioExceptionType.connectionTimeout ||
         err.type == DioExceptionType.receiveTimeout ||
         err.type == DioExceptionType.sendTimeout ||
         err.type == DioExceptionType.connectionError;
+    if (!isTransientError) return false;
+
+    return _idempotentMethods.contains(
+      err.requestOptions.method.toUpperCase(),
+    );
   }
 }

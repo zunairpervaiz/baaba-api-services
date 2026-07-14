@@ -19,10 +19,14 @@ abstract interface class ApiCacheHelper {
   /// Retrieves cached data corresponding to the provided URL asynchronously.
   /// Parameters:
   ///   url: The URL for which cached data is requested.
+  ///   maxAge: optional freshness window. If the cached entry is older than
+  ///     [maxAge], it is treated as a miss — the stale entry is cleared and
+  ///     `null` is returned instead of stale data. Omit to return cached data
+  ///     regardless of age (previous behaviour).
   /// Returns:
   ///   A future that completes with the cached data associated with the URL, if available.
   ///   If no cached data is found for the URL, returns null.
-  Future<APICacheDBModel?> getCacheData(String url);
+  Future<APICacheDBModel?> getCacheData(String url, {Duration? maxAge});
 
   /// Sets cached data for the provided URL with the given data asynchronously.
   /// Parameters:
@@ -90,10 +94,20 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
   final String _cacheKeyPrefix = "api_cache_";
 
   @override
-  Future<APICacheDBModel?> getCacheData(String url) async {
+  Future<APICacheDBModel?> getCacheData(String url, {Duration? maxAge}) async {
     var cacheKey = _cacheKeyPrefix + url;
     // Retrieves cached data using the constructed cache key asynchronously.
-    return _apiCacheManager.getCacheData(cacheKey);
+    final cached = await _apiCacheManager.getCacheData(cacheKey);
+
+    if (maxAge != null && cached.syncTime != null) {
+      final cachedAt = DateTime.fromMillisecondsSinceEpoch(cached.syncTime!);
+      if (DateTime.now().difference(cachedAt) > maxAge) {
+        await _apiCacheManager.deleteCache(cacheKey);
+        return null;
+      }
+    }
+
+    return cached;
   }
 
   @override

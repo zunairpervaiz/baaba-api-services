@@ -140,6 +140,66 @@ void main() {
       expect(refreshFailedCalled, isTrue);
     });
 
+    test(
+        'queues a concurrent 401 behind an in-flight refresh and retries both after success',
+        () async {
+      bool tokenRefreshed = false;
+      int refreshCallCount = 0;
+
+      dio.httpClientAdapter = _MockAdapter((options) async {
+        return tokenRefreshed ? _ok() : _unauthorized();
+      });
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => 'token',
+        onTokenRefresh: () async {
+          refreshCallCount++;
+          await Future.delayed(const Duration(milliseconds: 50));
+          tokenRefreshed = true;
+          return true;
+        },
+      ));
+
+      final first = dio.get('/a');
+      // Give the first request's onError a chance to start the refresh
+      // (and flip _isRefreshing) before firing the second — mirrors several
+      // requests 401ing in quick succession right as the token expires.
+      await Future.delayed(const Duration(milliseconds: 10));
+      final second = dio.get('/b');
+
+      final responses = await Future.wait([first, second]);
+
+      expect(responses[0].statusCode, 200);
+      expect(responses[1].statusCode, 200);
+      expect(refreshCallCount, 1); // only the first request triggered a refresh
+    });
+
+    test('gives up waiting after refreshTimeout and surfaces the original error',
+        () async {
+      dio.httpClientAdapter = _MockAdapter((_) async => _unauthorized());
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => 'token',
+        onTokenRefresh: () async {
+          await Future.delayed(const Duration(milliseconds: 200));
+          return true;
+        },
+        refreshTimeout: const Duration(milliseconds: 20),
+      ));
+
+      final first = dio.get('/a');
+      await Future.delayed(const Duration(milliseconds: 10));
+      final second = dio.get('/b');
+
+      // Second gives up after ~20ms instead of waiting the full 200ms refresh.
+      await expectLater(second, throwsA(isA<DioException>()));
+      // First still runs its own refresh to completion (adapter keeps 401ing
+      // here, so it fails too, but only after the real refresh finished).
+      await expectLater(first, throwsA(isA<DioException>()));
+    });
+
     test('uses custom headerBuilder when provided', () async {
       String? capturedHeader;
 

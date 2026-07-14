@@ -6,6 +6,11 @@ import 'package:dio/dio.dart';
 /// A Dio interceptor that automatically attaches auth headers to every request
 /// and retries requests that receive a 401 by refreshing the token first.
 ///
+/// Only one refresh runs at a time: if several requests 401 concurrently
+/// (e.g. right as the token expires), the first triggers [onTokenRefresh] and
+/// the rest wait for that same refresh to finish, then retry with the fresh
+/// token — none of them fail outright just for losing the race.
+///
 /// Use [ApiServices.configure] to set this up — you do not need to instantiate
 /// this class directly.
 class TokenRefreshInterceptor extends Interceptor {
@@ -51,6 +56,16 @@ class TokenRefreshInterceptor extends Interceptor {
   /// },
   /// ```
   final Map<String, String> Function(String token)? headerBuilder;
+
+  /// Bounds how long a request that arrives while a refresh is already in
+  /// flight will wait for that refresh to finish before giving up.
+  ///
+  /// Without a bound, a request whose 401 happens to be caused by
+  /// [onTokenRefresh]'s own underlying call (e.g. the refresh endpoint itself
+  /// returns 401 because the refresh token expired too) would wait forever —
+  /// that inner call is itself queued behind the very refresh it's part of.
+  final Duration refreshTimeout;
+
   final Dio _dio;
 
   bool _isRefreshing = false;
@@ -62,6 +77,7 @@ class TokenRefreshInterceptor extends Interceptor {
     required this.onTokenRefresh,
     this.onRefreshFailed,
     this.headerBuilder,
+    this.refreshTimeout = const Duration(seconds: 30),
   }) : _dio = dio;
 
   Map<String, String> _buildHeaders(String token) {
@@ -89,9 +105,19 @@ class TokenRefreshInterceptor extends Interceptor {
       return handler.next(err);
     }
 
-    // If a refresh is already in progress (e.g. the refresh endpoint itself returned 401),
-    // fail immediately to avoid a deadlock where both sides await each other.
+    // A refresh triggered by another request is already in flight — wait for
+    // it instead of failing immediately, so concurrent 401s (e.g. several
+    // requests firing right as the token expires) don't all error out just
+    // because they lost the race to be first. Bounded by [refreshTimeout] to
+    // avoid hanging forever in the pathological case described on that field.
     if (_isRefreshing) {
+      final refreshed = await _refreshCompleter!.future.timeout(
+        refreshTimeout,
+        onTimeout: () => false,
+      );
+      if (refreshed) {
+        return _retryRequest(err, handler);
+      }
       return handler.next(err);
     }
 

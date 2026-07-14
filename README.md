@@ -13,7 +13,8 @@ A Flutter package for HTTP API communication and response caching. Wraps [Dio](h
     - [PUT](#14-put)
     - [PATCH](#15-patch)
     - [DELETE](#16-delete)
-    - [Cancel Request](#17-cancel-request)
+    - [Download](#17-download)
+    - [Cancel Request](#18-cancel-request)
   - [API Cache Management](#2-api-cache-management)
     - [Get Cache](#21-get-cache)
     - [Set Cache](#22-set-cache)
@@ -31,7 +32,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^1.1.0
+  baaba_api_handler: ^1.3.0
 ```
 
 #### 2. Install Packages
@@ -55,6 +56,8 @@ import 'package:baaba_api_handler/ts_api_handler.dart';
 ### 1. Network API Handler
 
 Provides typed HTTP methods with built-in network checks, automatic token refresh, network retry, and structured error responses.
+
+Transient timeouts/connection errors are auto-retried (up to 3 times, exponential backoff) only for idempotent methods — `GET`, `PUT`, `DELETE` — since retrying `POST`/`PATCH` could duplicate a side effect the server already processed before the timeout.
 
 Create a singleton instance:
 
@@ -120,8 +123,11 @@ ApiServices.configure(
 | `onRefreshFailed`          | `void Function()?`                      | No       | Called when refresh fails (e.g. to trigger logout).                                                                          |
 | `headerBuilder`            | `Map<String, String> Function(String)?` | No       | Builds auth headers from the token. Defaults to `Authorization: Bearer <token>`.                                             |
 | `bypassConnectivityCheck`  | `bool`                                  | No       | Skip the pre-flight internet connectivity check. Use in staging or internal environments where connectivity probes always fail due to proxies or firewalls. Defaults to `false`. |
+| `refreshTimeout`           | `Duration`                              | No       | How long a request that 401s while another refresh is already in flight waits for that refresh before giving up and failing with the original error. Defaults to 30 seconds. |
 
 > If you do not need token auth, skip this and call `ApiServices.instance()` directly.
+
+Requests that 401 while a refresh triggered by another request is already running wait for that same refresh to finish and retry with the fresh token — they don't fail outright just for losing the race. If the refresh itself doesn't resolve within `refreshTimeout` (e.g. the refresh endpoint's own call is stuck), the waiting request gives up and surfaces its original 401 as a `Failure`.
 
 #### Custom Headers with `headerBuilder`
 
@@ -219,7 +225,38 @@ final response = await apiServices.patch(
 final response = await apiServices.delete(endpoint: 'https://api.example.com/users/1');
 ```
 
-#### 1.7 Cancel Request
+#### 1.7 Download
+
+Streams a file response directly to disk instead of loading it into memory — use for images, PDFs, exports, or any file response.
+
+```dart
+final dir = await getApplicationDocumentsDirectory();
+final response = await apiServices.download(
+  endpoint: 'https://api.example.com/files/report.pdf',
+  savePath: '${dir.path}/report.pdf',
+  onReceiveProgress: (received, total) => print('${received / total * 100}%'),
+);
+
+response.fold(
+  (failure) => print('Error ${failure.message}'),
+  (_) => openFile('${dir.path}/report.pdf'),
+);
+```
+
+| Parameter          | Type                | Required | Description                                            |
+| ------------------ | ------------------- | -------- | ------------------------------------------------------ |
+| `endpoint`         | `String`            | Yes      | Full URL of the file to download.                       |
+| `savePath`         | `String`            | Yes      | Local path to write the downloaded file to.             |
+| `params`           | `Map<String, dynamic>?` | No   | Query parameters.                                       |
+| `headers`          | `Map<String, String>?`  | No   | Custom headers.                                         |
+| `receiveTimeout`   | `Duration?`         | No       | Timeout for receiving the response.                     |
+| `sendTimeout`      | `Duration?`         | No       | Timeout for sending the request.                        |
+| `cancelToken`      | `CancelToken?`      | No       | Token to cancel this specific download.                 |
+| `onReceiveProgress`| `ProgressCallback?` | No       | Download progress callback.                             |
+| `deleteOnError`    | `bool`              | No       | Delete the partially-written file if the download fails. Defaults to `true`. |
+| `showLoader`       | `bool`              | No       | Show the global loading indicator for this call. Defaults to `true`. |
+
+#### 1.8 Cancel Request
 
 Cancel all in-flight requests at once:
 
@@ -254,11 +291,16 @@ final apiCacheHelper = ApiCacheHelper.instance;
 
 ```dart
 final cached = await apiCacheHelper.getCacheData(url);
+
+// With a freshness window — entries older than 5 minutes are treated as a
+// miss (and cleared) instead of being returned stale:
+final fresh = await apiCacheHelper.getCacheData(url, maxAge: const Duration(minutes: 5));
 ```
 
-| Parameter | Type     | Required | Description                              |
-| --------- | -------- | -------- | ---------------------------------------- |
-| `url`     | `String` | Yes      | The URL whose cached response to fetch.  |
+| Parameter | Type       | Required | Description                                                            |
+| --------- | ---------- | -------- | ------------------------------------------------------------------------ |
+| `url`     | `String`   | Yes      | The URL whose cached response to fetch.                                |
+| `maxAge`  | `Duration?`| No       | If the cached entry is older than this, it's cleared and `null` is returned instead of stale data. Omit to return cached data regardless of age. |
 
 #### 2.2 Set Cache
 
