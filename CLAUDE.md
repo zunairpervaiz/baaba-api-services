@@ -86,7 +86,7 @@ The interceptor is only added to Dio when `configure()` has been called. Without
 
 `ResponseCode` supports: `success(200)`, `created(201)`, `noContent(204)`, `badRequest(400)`, `unauthorized(401)`, `forbidden(403)`, `notFound(404)`, `requestTimeout(408)`, `conflict(409)`, `unprocessableEntity(422)`, `tooManyRequests(429)`, `internalServerError(500)`, `badGateway(502)`, `serviceNotAvailable(503)`, plus internal codes (`connectTimeout(-1)`, `cancel(-2)`, `receiveTimeout(-3)`, `sendTimeout(-4)`, `cacheError(-5)`, `noInternetConnection(-6)`, `defaultError(-7)`, `connectionFailure(-8)`).
 
-When the server returns a JSON body, `ErrorHandler` extracts the `message` or `error` key for the `Failure.message`. Otherwise it falls back to `ResponseStrings` string constants.
+When the server returns a JSON body, `ErrorHandler` extracts the `message`, `detail`, or `error` key for the `Failure.message`. Otherwise it falls back to `ResponseStrings` string constants.
 
 ### Caching
 

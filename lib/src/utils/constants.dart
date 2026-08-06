@@ -5,3 +5,4 @@ const String authorization = "authorization";
 const String token = "token";
 const String messageKey = 'message';
 const String errorKey = 'error';
+const String detailKey = "detail";

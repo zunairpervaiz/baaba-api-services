@@ -55,7 +55,7 @@ import 'package:baaba_api_handler/ts_api_handler.dart';
 
 ### 1. Network API Handler
 
-Provides typed HTTP methods with built-in network checks, automatic token refresh, network retry, and structured error responses.
+Provides typed HTTP methods with built-in network checks, automatic token refresh, network retry, and structured error responses (automatically extracting `message` or `detail` keys from error bodies).
 
 Transient timeouts/connection errors are auto-retried (up to 3 times, exponential backoff) only for idempotent methods — `GET`, `PUT`, `DELETE` — since retrying `POST`/`PATCH` could duplicate a side effect the server already processed before the timeout.
 

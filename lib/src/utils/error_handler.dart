@@ -36,6 +36,8 @@ Failure _handleError(DioException error) {
         } else if (responseData is Map<String, dynamic>) {
           if (responseData.containsKey(messageKey)) {
             errorMessage = responseData[messageKey].toString();
+          } else if (responseData.containsKey(detailKey)) {
+            errorMessage = responseData[detailKey].toString();
           } else if (responseData.containsKey(errorKey)) {
             errorMessage = responseData[errorKey].toString();
           }

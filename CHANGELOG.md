@@ -1,3 +1,7 @@
+## 1.3.1
+
+* Added support for the `detail` key in API error responses (RFC 7807), falling back to it if `message` is missing but prioritizing it over `error`.
+
 ## 1.3.0
 
 * Added `ApiServices.download()` — streams a file response directly to disk (`savePath`) instead of loading it into memory, with `onReceiveProgress`, `cancelToken`, and `deleteOnError` support. Goes through the same connectivity check and loader plumbing as the other HTTP methods.
