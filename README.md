@@ -124,6 +124,7 @@ ApiServices.configure(
 | `headerBuilder`            | `Map<String, String> Function(String)?` | No       | Builds auth headers from the token. Defaults to `Authorization: Bearer <token>`.                                             |
 | `bypassConnectivityCheck`  | `bool`                                  | No       | Skip the pre-flight internet connectivity check. Use in staging or internal environments where connectivity probes always fail due to proxies or firewalls. Defaults to `false`. |
 | `refreshTimeout`           | `Duration`                              | No       | How long a request that 401s while another refresh is already in flight waits for that refresh before giving up and failing with the original error. Defaults to 30 seconds. |
+| `logging`                  | `ApiLogOptions`                         | No       | What the console logger prints. Defaults to `const ApiLogOptions()` (request line, request body, response body, errors). See [Logging](#logging). |
 
 > If you do not need token auth, skip this and call `ApiServices.instance()` directly.
 
@@ -183,6 +184,56 @@ ApiServices.setConnectivityCheck(enabled: false);
 | Parameter | Type   | Default | Description                                                   |
 | --------- | ------ | ------- | ------------------------------------------------------------- |
 | `enabled` | `bool` | `true`  | Set to `false` to skip the check; `true` to re-enable it.    |
+
+#### Logging
+
+In non-release builds every request is printed to the console. Pass an `ApiLogOptions` to decide what shows up:
+
+```dart
+ApiServices.configure(
+  getToken: () async => await storage.read(key: 'access_token'),
+  onTokenRefresh: () async => await authRepository.refresh(),
+  logging: const ApiLogOptions(
+    requestBody: false,    // don't print passwords / PII
+    requestHeader: true,   // but do show the Authorization header
+    responseBody: false,   // responses are large and noisy
+  ),
+);
+```
+
+| Field           | Type                        | Default | Description                                                                       |
+| --------------- | --------------------------- | ------- | --------------------------------------------------------------------------------- |
+| `enabled`       | `bool`                      | `true`  | Master switch. When `false` no logger is attached and every other field is ignored. |
+| `request`       | `bool`                      | `true`  | The request line — method and URL.                                                |
+| `requestHeader` | `bool`                      | `false` | Request headers and query parameters. Includes `Authorization`.                   |
+| `requestBody`   | `bool`                      | `true`  | The request body. Never printed for `GET` regardless of this flag.                |
+| `responseHeader`| `bool`                      | `false` | Response headers.                                                                 |
+| `responseBody`  | `bool`                      | `true`  | The response body.                                                                |
+| `error`         | `bool`                      | `true`  | Errors, including non-2xx responses.                                              |
+| `maxWidth`      | `int`                       | `90`    | Line width before wrapping.                                                       |
+| `compact`       | `bool`                      | `true`  | Print JSON compactly instead of one node per line.                                |
+| `logPrint`      | `void Function(Object)?`    | `print` | Where log lines go — e.g. `debugPrint` to dodge Android log truncation, or a file sink. |
+
+To silence logging completely, even in debug:
+
+```dart
+logging: const ApiLogOptions.disabled(),
+```
+
+Without token auth, use `setLogging` instead — call it before the first `ApiServices.instance()`, since the Dio client and its logger are built once and cached:
+
+```dart
+ApiServices.setLogging(const ApiLogOptions(requestBody: false));
+```
+
+`copyWith` is available if you keep a base config per environment:
+
+```dart
+const base = ApiLogOptions(requestBody: false);
+ApiServices.setLogging(base.copyWith(requestHeader: true));  // debugging auth
+```
+
+> Release builds never attach the logger at all, so these options only change what you see while developing.
 
 ---
 

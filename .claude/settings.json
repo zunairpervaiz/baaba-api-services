@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(dart format lib/ test/)",
+      "Bash(git checkout *)",
+      "Bash(sed -n '1,100p' ~/AppData/Local/Pub/Cache/hosted/pub.dev/pretty_dio_logger-*/lib/src/pretty_dio_logger.dart)",
+      "Bash(sed -n '1,100p' D:/flutter_pub_cache/hosted/pub.dev/pretty_dio_logger-*/lib/src/pretty_dio_logger.dart)",
+      "PowerShell(dart format lib/src/api_service.dart lib/src/dio_factory.dart lib/src/utils/api_log_options.dart lib/ts_api_handler.dart test/dio_factory_test.dart)"
+    ]
+  }
+}

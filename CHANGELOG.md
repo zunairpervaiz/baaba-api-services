@@ -1,3 +1,10 @@
+## 1.4.0
+
+* Added `ApiLogOptions` — the consuming app now controls what the console logger prints: `enabled`, `request`, `requestHeader`, `requestBody`, `responseHeader`, `responseBody`, `error`, `maxWidth`, `compact`, and `logPrint`. Previously the logger was hardcoded to `requestBody: true` with no way to change it. Includes an `ApiLogOptions.disabled()` constructor and `copyWith`.
+* Added `logging` parameter to `ApiServices.configure()`, defaulting to `const ApiLogOptions()` — same output as before, so existing callers see no change.
+* Added `ApiServices.setLogging(ApiLogOptions)` — same control for apps that don't use token auth. Must be called before the first `ApiServices.instance()`, since the Dio client and its logger are built once and cached.
+* Release builds are unaffected: the logger is still never attached when `kReleaseMode` is true.
+
 ## 1.3.1
 
 * Added support for the `detail` key in API error responses (RFC 7807), falling back to it if `message` is missing but prioritizing it over `error`.

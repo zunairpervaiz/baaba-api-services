@@ -1,5 +1,6 @@
 import 'package:baaba_api_handler/src/dio_factory.dart';
 import 'package:baaba_api_handler/src/interceptors/token_refresh_interceptor.dart';
+import 'package:baaba_api_handler/src/utils/api_log_options.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
@@ -53,6 +54,7 @@ import 'package:fpdart/fpdart.dart';
 abstract interface class ApiServices {
   static ApiServices? _instance;
   static bool _bypassConnectivityCheck = false;
+  static ApiLogOptions _logOptions = const ApiLogOptions();
   static void Function()? _onLoadingShow;
   static void Function()? _onLoadingHide;
 
@@ -64,7 +66,7 @@ abstract interface class ApiServices {
   /// Pass a custom [dio] only in tests — do not use in production code.
   static ApiServices instance([Dio? dio]) {
     _instance ??= ApiServicesImplementation.instanceFor(
-      dio: dio ?? DioFactory().getDio(),
+      dio: dio ?? DioFactory().getDio(logOptions: _logOptions),
     );
     return _instance!;
   }
@@ -98,6 +100,12 @@ abstract interface class ApiServices {
   ///   is already in flight will wait for that refresh before giving up and
   ///   failing with the original error. Defaults to 30 seconds.
   ///
+  /// - [logging] — what the console logger prints (request line, headers,
+  ///   bodies, errors, width, compactness, and where the lines go). Pass
+  ///   `ApiLogOptions.disabled()` to turn logging off. Only affects
+  ///   non-release builds — nothing is logged in release regardless.
+  ///   See [ApiLogOptions] and [setLogging].
+  ///
   /// **Example:**
   ///
   /// ```dart
@@ -123,9 +131,11 @@ abstract interface class ApiServices {
     Map<String, String> Function(String token)? headerBuilder,
     bool bypassConnectivityCheck = false,
     Duration refreshTimeout = const Duration(seconds: 30),
+    ApiLogOptions logging = const ApiLogOptions(),
   }) {
     _bypassConnectivityCheck = bypassConnectivityCheck;
-    final dio = DioFactory().getDio();
+    _logOptions = logging;
+    final dio = DioFactory().getDio(logOptions: logging);
     dio.interceptors.add(TokenRefreshInterceptor(
       dio: dio,
       getToken: getToken,
@@ -152,6 +162,27 @@ abstract interface class ApiServices {
   /// ```
   static void setConnectivityCheck({bool enabled = true}) {
     _bypassConnectivityCheck = !enabled;
+  }
+
+  /// Configures the console logger without calling [configure].
+  ///
+  /// Use when you don't need token auth but still want to control what shows
+  /// up in the logs. See [ApiLogOptions] for the individual switches.
+  ///
+  /// Must be called **before** the first [instance] call, since the Dio client
+  /// (and its logger) is built once and cached.
+  ///
+  /// **Example:**
+  ///
+  /// ```dart
+  /// // Before configureDependencies() / any request.
+  /// ApiServices.setLogging(const ApiLogOptions(
+  ///   requestBody: false,
+  ///   responseBody: false,
+  /// ));
+  /// ```
+  static void setLogging(ApiLogOptions options) {
+    _logOptions = options;
   }
 
   /// Configures a global loading indicator shown automatically around every

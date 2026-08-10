@@ -29,7 +29,7 @@ flutter pub get
 
 Re-exports only: `ApiServices`, `ApiCacheHelper`, `ErrorSource`, `Failure`, `ResponseCode`, and pass-through types `APICacheDBModel`, `CancelToken`, `Response`.
 
-Current version: **1.3.0**
+Current version: **1.4.0**
 
 ### Request lifecycle
 
@@ -50,6 +50,17 @@ All HTTP methods return `Either<Failure, Response>` (fpdart). Callers use `.fold
 `download({endpoint, savePath, ...})` streams the response body directly to `savePath` instead of loading it into memory, for images/PDFs/exports. It shares the connectivity check, `CancelToken` tracking, and loader plumbing with the other methods but bypasses `TokenRefreshInterceptor`/`NetworkRetryInterceptor` retry semantics that assume a buffered response — see `ApiServicesImplementation.download` in `src/api_service.dart`.
 
 `NetworkRetryInterceptor` only retries `GET`/`HEAD`/`OPTIONS`/`PUT`/`DELETE`. `POST`/`PATCH` are never auto-retried — the server may have already processed the request before the timeout, and a blind retry could duplicate the side effect (e.g. creating the same order twice).
+
+### Request logging
+
+`PrettyDioLogger` is attached in `DioFactory.getDio()` only when `!kReleaseMode` **and** `logOptions.enabled`. What it prints is consumer-controlled via `ApiLogOptions` (`src/utils/api_log_options.dart`), two ways, mirroring the connectivity-check pattern:
+
+- `logging: ApiLogOptions(...)` on `ApiServices.configure(...)` (when using token auth).
+- `ApiServices.setLogging(ApiLogOptions(...))` — must run before the first `instance()` call, because the Dio client and its interceptors are built once and cached.
+
+The options are stored in `ApiServices._logOptions` so both the `configure()` and lazy `instance()` construction paths see the same value. `ApiLogOptions` deliberately mirrors `PrettyDioLogger`'s constructor rather than exposing it — `PrettyDioLogger` is not in the public surface, so the logging library can be swapped without a breaking change. `filter` is intentionally not mirrored: its callback takes `FilterArgs`, which would leak the package type.
+
+`ApiLogOptions()` defaults reproduce the pre-1.4.0 hardcoded behaviour (request line, request body, response body, errors), so existing callers see identical output.
 
 ### Connectivity check
 
