@@ -17,15 +17,16 @@ abstract interface class ApiCacheHelper {
   }
 
   /// Retrieves cached data corresponding to the provided URL asynchronously.
+  ///
+  /// Returns `null` on a miss, and never throws — see the implementation note
+  /// about the underlying package's behaviour on an unknown key.
+  ///
   /// Parameters:
   ///   url: The URL for which cached data is requested.
   ///   maxAge: optional freshness window. If the cached entry is older than
   ///     [maxAge], it is treated as a miss — the stale entry is cleared and
   ///     `null` is returned instead of stale data. Omit to return cached data
   ///     regardless of age (previous behaviour).
-  /// Returns:
-  ///   A future that completes with the cached data associated with the URL, if available.
-  ///   If no cached data is found for the URL, returns null.
   Future<APICacheDBModel?> getCacheData(String url, {Duration? maxAge});
 
   /// Sets cached data for the provided URL with the given data asynchronously.
@@ -96,8 +97,24 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
   @override
   Future<APICacheDBModel?> getCacheData(String url, {Duration? maxAge}) async {
     var cacheKey = _cacheKeyPrefix + url;
-    // Retrieves cached data using the constructed cache key asynchronously.
-    final cached = await _apiCacheManager.getCacheData(cacheKey);
+
+    // APICacheManager.getCacheData does `.first` on the query result, so a key
+    // that was never cached throws StateError. Catching that is the miss
+    // check.
+    //
+    // Deliberately *not* guarded with isAPICacheKeyExist first. That returns
+    // `rows.length == 1`, so it answers false for a key with duplicate rows
+    // just as it does for a missing one — turning a recoverable state into a
+    // permanent miss. `.first` copes with duplicates perfectly well, and this
+    // is one query instead of two.
+    final APICacheDBModel cached;
+    try {
+      cached = await _apiCacheManager.getCacheData(cacheKey);
+    } catch (_) {
+      return null;
+    }
+
+    if (cached.syncData.isEmpty) return null;
 
     if (maxAge != null && cached.syncTime != null) {
       final cachedAt = DateTime.fromMillisecondsSinceEpoch(cached.syncTime!);
@@ -110,13 +127,43 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
     return cached;
   }
 
+  /// Writes in flight, keyed by cache key, so same-key writes run in sequence.
+  final Map<String, Future<bool>> _pendingWrites = {};
+
   @override
-  Future<bool> setCacheData(String url, String data) async {
+  Future<bool> setCacheData(String url, String data) {
     var cacheKey = _cacheKeyPrefix + url;
-    // Creates a new APICacheDBModel instance with the constructed cache key and the provided data.
-    APICacheDBModel dbModel = APICacheDBModel(key: cacheKey, syncData: data);
-    // Adds the newly created cache model to the cache asynchronously and returns the operation's success status.
-    return await _apiCacheManager.addCacheData(dbModel);
+
+    // APICacheManager.addCacheData is check-then-act — it asks
+    // isAPICacheKeyExist and then inserts or updates — with no transaction
+    // around the pair. Two concurrent writes for one key therefore both see
+    // "absent" and both insert, leaving duplicate rows. That state is not
+    // self-correcting: isAPICacheKeyExist answers `rows.length == 1`, so it
+    // then reports the key as missing forever while every further write adds
+    // another row.
+    //
+    // Request de-duplication makes this the ordinary path rather than a rare
+    // race: two callers collapsed onto one network call each write the
+    // response afterwards. Chaining writes per key keeps the check and the act
+    // together.
+    final previous = _pendingWrites[cacheKey];
+    final write = previous == null
+        ? _write(cacheKey, data)
+        : previous.then((_) => _write(cacheKey, data),
+            onError: (_) => _write(cacheKey, data));
+
+    _pendingWrites[cacheKey] = write;
+    return write.whenComplete(() {
+      // Only clear if no later write has taken the slot.
+      if (identical(_pendingWrites[cacheKey], write)) {
+        _pendingWrites.remove(cacheKey);
+      }
+    });
+  }
+
+  Future<bool> _write(String cacheKey, String data) {
+    return _apiCacheManager
+        .addCacheData(APICacheDBModel(key: cacheKey, syncData: data));
   }
 
   @override

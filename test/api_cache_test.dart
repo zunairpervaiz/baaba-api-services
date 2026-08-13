@@ -26,6 +26,10 @@ void runApiCacheTests() {
     });
 
     setUp(() {
+      // The mock is shared across the group, so clear recorded interactions
+      // and stubs between tests — otherwise a verifyNever here trips over a
+      // call an earlier test made.
+      reset(mockApiCacheManager);
       cacheHelper = ApiCacheHelperImplementation.instanceFor(
           apiCacheManager: mockApiCacheManager);
     });
@@ -48,6 +52,96 @@ void runApiCacheTests() {
           .thenAnswer((invocation) async => expectedData);
       final result = await cacheHelper.getCacheData(url);
       expect(result, expectedData);
+    });
+
+    test("getCacheData - returns null on a miss instead of throwing", () async {
+      // APICacheManager.getCacheData does `.first` on an empty query result,
+      // so an uncached key threw StateError before 2.0.0 despite the nullable
+      // return type.
+      when(() => mockApiCacheManager.getCacheData(cacheKey))
+          .thenThrow(StateError('No element'));
+
+      expect(await cacheHelper.getCacheData(url), isNull);
+    });
+
+    test("getCacheData - reads through duplicate rows rather than giving up",
+        () async {
+      // isAPICacheKeyExist answers `rows.length == 1`, so it reports a
+      // duplicated key as missing. Guarding on it would turn a recoverable
+      // state into a permanent miss; `.first` copes fine.
+      final expectedData = APICacheDBModel(key: url, syncData: data);
+      when(() => mockApiCacheManager.isAPICacheKeyExist(cacheKey))
+          .thenAnswer((_) async => false);
+      when(() => mockApiCacheManager.getCacheData(cacheKey))
+          .thenAnswer((_) async => expectedData);
+
+      expect(await cacheHelper.getCacheData(url), expectedData);
+    });
+
+    test("getCacheData - treats an empty entry as a miss", () async {
+      when(() => mockApiCacheManager.getCacheData(cacheKey))
+          .thenAnswer((_) async => APICacheDBModel(key: url, syncData: ''));
+
+      expect(await cacheHelper.getCacheData(url), isNull);
+    });
+
+    test("setCacheData - serialises concurrent writes to the same key",
+        () async {
+      // addCacheData is check-then-act with no transaction, so overlapping
+      // writes would both insert and leave duplicate rows. Request
+      // de-duplication makes concurrent same-key writes routine.
+      var inFlight = 0;
+      var maxConcurrent = 0;
+      when(() => mockApiCacheManager.addCacheData(any())).thenAnswer((_) async {
+        inFlight++;
+        maxConcurrent = inFlight > maxConcurrent ? inFlight : maxConcurrent;
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        inFlight--;
+        return true;
+      });
+
+      await Future.wait([
+        cacheHelper.setCacheData(url, 'first'),
+        cacheHelper.setCacheData(url, 'second'),
+        cacheHelper.setCacheData(url, 'third'),
+      ]);
+
+      expect(maxConcurrent, 1);
+      verify(() => mockApiCacheManager.addCacheData(any())).called(3);
+    });
+
+    test("setCacheData - different keys still write in parallel", () async {
+      var inFlight = 0;
+      var maxConcurrent = 0;
+      when(() => mockApiCacheManager.addCacheData(any())).thenAnswer((_) async {
+        inFlight++;
+        maxConcurrent = inFlight > maxConcurrent ? inFlight : maxConcurrent;
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        inFlight--;
+        return true;
+      });
+
+      await Future.wait([
+        cacheHelper.setCacheData('a', 'one'),
+        cacheHelper.setCacheData('b', 'two'),
+      ]);
+
+      expect(maxConcurrent, 2);
+    });
+
+    test("setCacheData - a failed write does not block the next one", () async {
+      var calls = 0;
+      when(() => mockApiCacheManager.addCacheData(any())).thenAnswer((_) async {
+        calls++;
+        if (calls == 1) throw StateError('disk full');
+        return true;
+      });
+
+      final first = cacheHelper.setCacheData(url, 'first');
+      final second = cacheHelper.setCacheData(url, 'second');
+
+      await expectLater(first, throwsStateError);
+      expect(await second, isTrue);
     });
 
     test("isCacheExist - Test cache existence", () async {

@@ -25,7 +25,8 @@ ResponseBody _ok() => ResponseBody.fromString('{}', 200, headers: {
       Headers.contentTypeHeader: [Headers.jsonContentType],
     });
 
-ResponseBody _unauthorized() => ResponseBody.fromString('{"error":"Unauthorized"}', 401, headers: {
+ResponseBody _unauthorized() =>
+    ResponseBody.fromString('{"error":"Unauthorized"}', 401, headers: {
       Headers.contentTypeHeader: [Headers.jsonContentType],
     });
 
@@ -81,7 +82,8 @@ void main() {
       expect(callCount, 2);
     });
 
-    test('does not retry a second time when _tokenRetried flag is set', () async {
+    test('does not retry a second time when _tokenRetried flag is set',
+        () async {
       int callCount = 0;
       int refreshCount = 0;
 
@@ -131,7 +133,8 @@ void main() {
       dio.interceptors.add(TokenRefreshInterceptor(
         dio: dio,
         getToken: () async => 'token',
-        onTokenRefresh: () async => throw Exception('network error during refresh'),
+        onTokenRefresh: () async =>
+            throw Exception('network error during refresh'),
         onRefreshFailed: () => refreshFailedCalled = true,
       ));
 
@@ -175,7 +178,8 @@ void main() {
       expect(refreshCallCount, 1); // only the first request triggered a refresh
     });
 
-    test('gives up waiting after refreshTimeout and surfaces the original error',
+    test(
+        'gives up waiting after refreshTimeout and surfaces the original error',
         () async {
       dio.httpClientAdapter = _MockAdapter((_) async => _unauthorized());
 

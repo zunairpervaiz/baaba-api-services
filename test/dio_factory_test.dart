@@ -1,47 +1,113 @@
+import 'package:baaba_api_handler/src/config/api_config.dart';
+import 'package:baaba_api_handler/src/config/auth_config.dart';
 import 'package:baaba_api_handler/src/dio_factory.dart';
+import 'package:baaba_api_handler/src/interceptors/network_retry_interceptor.dart';
+import 'package:baaba_api_handler/src/interceptors/observer_interceptor.dart';
+import 'package:baaba_api_handler/src/interceptors/token_refresh_interceptor.dart';
+import 'package:baaba_api_handler/src/observer/api_observer.dart';
 import 'package:baaba_api_handler/src/utils/api_log_options.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 
-class MockDio extends Mock implements Dio {}
+class _NoopObserver extends ApiObserver {
+  const _NoopObserver();
+}
 
 void main() {
   group('Dio Factory', () {
     late DioFactory dioFactory;
-    late MockDio mockDio;
 
-    setUp(() {
-      mockDio = MockDio();
-      dioFactory = DioFactory();
-    });
+    setUp(() => dioFactory = DioFactory());
 
-    test('getDio return a configured dio instance', () {
+    test('applies default timeouts so a request cannot hang forever', () {
+      // Regression guard for the pre-2.0.0 behaviour, where no timeout was set
+      // at any layer and a black-holed host hung until the OS gave up.
       final dio = dioFactory.getDio();
-      expect(dio, isA<Dio>());
 
-      expect(dio.options.headers, isEmpty);
-      expect(dio.options.receiveTimeout, isNull);
-      expect(dio.options.sendTimeout, isNull);
+      expect(dio.options.connectTimeout, const Duration(seconds: 30));
+      expect(dio.options.receiveTimeout, const Duration(seconds: 30));
+      expect(dio.options.sendTimeout, const Duration(seconds: 30));
     });
 
-    test('getDio returns a configured Dio instance with custom headers', () {
-      final customHeaders = {'Authorization': 'Bearer token'};
-      final dio = dioFactory.getDio(header: customHeaders);
+    test('applies baseUrl and default headers from the config', () {
+      final dio = dioFactory.getDio(
+        config: const ApiConfig(
+          baseUrl: 'https://api.example.com',
+          defaultHeaders: {'X-Client': 'mobile'},
+        ),
+      );
 
-      // Verify that Dio instance was created
-      expect(dio, isA<Dio>());
+      expect(dio.options.baseUrl, 'https://api.example.com');
+      expect(dio.options.headers['X-Client'], 'mobile');
+    });
 
-      // Verify that Dio options are configured correctly
-      expect(dio.options.headers, equals(customHeaders));
-      expect(dio.options.receiveTimeout, isNull);
-      expect(dio.options.sendTimeout, isNull);
+    test('leaves baseUrl empty when the config omits it', () {
+      final dio = dioFactory.getDio();
+
+      expect(dio.options.baseUrl, isEmpty);
+      expect(dio.options.headers, isEmpty);
+    });
+
+    test('honours custom timeouts', () {
+      final dio = dioFactory.getDio(
+        config: const ApiConfig(
+          connectTimeout: Duration(seconds: 5),
+          receiveTimeout: Duration(minutes: 2),
+          sendTimeout: Duration(seconds: 45),
+        ),
+      );
+
+      expect(dio.options.connectTimeout, const Duration(seconds: 5));
+      expect(dio.options.receiveTimeout, const Duration(minutes: 2));
+      expect(dio.options.sendTimeout, const Duration(seconds: 45));
+    });
+
+    test('attaches the retry interceptor but no auth interceptor by default',
+        () {
+      final dio = dioFactory.getDio();
+
+      expect(
+          dio.interceptors.whereType<NetworkRetryInterceptor>(), hasLength(1));
+      expect(dio.interceptors.whereType<TokenRefreshInterceptor>(), isEmpty);
+      expect(dio.interceptors.whereType<ObserverInterceptor>(), isEmpty);
+    });
+
+    test('orders auth before retry so a retry carries a valid token', () {
+      final dio = dioFactory.getDio(
+        config: ApiConfig(
+          auth: AuthConfig(
+            getToken: () async => 'token',
+            onTokenRefresh: () async => true,
+          ),
+          observer: const _NoopObserver(),
+        ),
+      );
+
+      final authIndex =
+          dio.interceptors.indexWhere((i) => i is TokenRefreshInterceptor);
+      final retryIndex =
+          dio.interceptors.indexWhere((i) => i is NetworkRetryInterceptor);
+      final observerIndex =
+          dio.interceptors.indexWhere((i) => i is ObserverInterceptor);
+
+      expect(authIndex, isNonNegative);
+      expect(authIndex, lessThan(retryIndex));
+      // The observer goes last so it sees the final outcome.
+      expect(observerIndex, greaterThan(retryIndex));
+    });
+
+    test('installs a custom HttpClientAdapter when one is supplied', () {
+      final adapter = _RecordingAdapter();
+      final dio = dioFactory.getDio(
+        config: ApiConfig(httpClientAdapter: adapter),
+      );
+
+      expect(dio.httpClientAdapter, same(adapter));
     });
 
     test(
-        'getDio logs the request line, request body, response body and errors '
+        'logs the request line, request body, response body and errors '
         'by default', () {
       final dio = dioFactory.getDio();
 
@@ -54,19 +120,21 @@ void main() {
       expect(logger.responseHeader, isFalse);
     });
 
-    test('getDio forwards every ApiLogOptions field to PrettyDioLogger', () {
+    test('forwards every ApiLogOptions field to PrettyDioLogger', () {
       final lines = <Object>[];
       final dio = dioFactory.getDio(
-        logOptions: ApiLogOptions(
-          request: false,
-          requestHeader: true,
-          requestBody: false,
-          responseHeader: true,
-          responseBody: false,
-          error: false,
-          maxWidth: 120,
-          compact: false,
-          logPrint: lines.add,
+        config: ApiConfig(
+          logging: ApiLogOptions(
+            request: false,
+            requestHeader: true,
+            requestBody: false,
+            responseHeader: true,
+            responseBody: false,
+            error: false,
+            maxWidth: 120,
+            compact: false,
+            logPrint: lines.add,
+          ),
         ),
       );
 
@@ -84,44 +152,35 @@ void main() {
       expect(lines, ['hello']);
     });
 
-    test('getDio attaches no logger when logging is disabled', () {
+    test('routes log output to the supplied logPrint sink', () {
+      // Consumers wrap this to strip base64 blobs out of the stream, so the
+      // sink they pass must be the one PrettyDioLogger actually calls.
+      final lines = <Object>[];
       final dio = dioFactory.getDio(
-        logOptions: const ApiLogOptions.disabled(),
+        config: ApiConfig(logging: ApiLogOptions(logPrint: lines.add)),
+      );
+
+      dio.interceptors.whereType<PrettyDioLogger>().single.logPrint('hello');
+
+      expect(lines, ['hello']);
+    });
+
+    test('attaches no logger when logging is disabled', () {
+      final dio = dioFactory.getDio(
+        config: const ApiConfig(logging: ApiLogOptions.disabled()),
       );
 
       expect(dio.interceptors.whereType<PrettyDioLogger>(), isEmpty);
     });
-
-    test('getDio adds PrettyDioLogger interceptor in non-release mode', () {
-      // Mock kReleaseMode to be false
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-
-      final dio = dioFactory.getDio();
-
-      // Verify that Dio instance was created
-      expect(dio, isA<Dio>());
-
-      // Verify that PrettyDioLogger interceptor was added
-      verifyNever(() => mockDio.interceptors.add(any()));
-
-      // Reset debugDefaultTargetPlatformOverride
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    test('getDio does not add PrettyDioLogger interceptor in release mode', () {
-      // Mock kReleaseMode to be true
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-
-      final dio = dioFactory.getDio();
-
-      // Verify that Dio instance was created
-      expect(dio, isA<Dio>());
-
-      // Verify that PrettyDioLogger interceptor was not added
-      verifyNever(() => mockDio.interceptors.add(any()));
-
-      // Reset debugDefaultTargetPlatformOverride
-      debugDefaultTargetPlatformOverride = null;
-    });
   });
+}
+
+class _RecordingAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(RequestOptions options, Stream<List<int>>? stream,
+          Future<void>? cancelFuture) async =>
+      ResponseBody.fromString('{}', 200);
+
+  @override
+  void close({bool force = false}) {}
 }

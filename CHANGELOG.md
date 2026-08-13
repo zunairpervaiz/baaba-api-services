@@ -1,3 +1,44 @@
+## 2.0.0
+
+Everything from 1.x keeps working — the old entrypoints are deprecated, not removed. See `MIGRATION.md` for the three things that can actually break you.
+
+### ⚠️ Behaviour changes to know about before upgrading
+
+* **Requests now time out.** 1.x set no timeout at any layer, so a request to an unreachable-but-not-refusing host hung until the OS gave up. The defaults are 30s each for connect/receive/send. If you have an endpoint that legitimately takes longer — a slow export or report — raise `receiveTimeout` for that call or globally, rather than removing the bound.
+* **`ErrorSource` and `ResponseCode` gained a `parseError` variant.** If you `switch` exhaustively over either enum, that switch no longer compiles until you add a case. This is the only source-breaking change and the reason this is a major release.
+* **`Failure` equality now includes `data` and `statusCode`.** Two failures that differ only in response body are no longer equal.
+
+### Fixed
+
+* **`ApiCacheHelper.getCacheData` threw on a cache miss.** The underlying `APICacheManager.getCacheData` calls `.first` on an empty query result, so asking for a URL that was never cached raised `StateError` despite the nullable return type promising otherwise. It now returns `null`.
+* **Concurrent writes to one cache key could poison it permanently.** `APICacheManager.addCacheData` checks `isAPICacheKeyExist` and then inserts or updates, with no transaction around the pair, so two overlapping writes both insert. The duplicate rows are not self-correcting: `isAPICacheKeyExist` answers `rows.length == 1`, so it then reports the key as missing forever while every further write appends another row. Request de-duplication makes overlapping same-key writes routine rather than rare, so `setCacheData` now serialises writes per key.
+* **Uploads threw instead of retrying.** A `FormData` is a stream Dio reads once — `finalize()` throws `StateError` on a second read. Both replay paths hit it: a `429`/`503` retry (those bypass the idempotency check, so an upload *is* retried) and a `401` token refresh, which is a likely outcome for an upload long enough to outlive its token. The body is now rebuilt with `FormData.clone()` before either replay.
+* **A JSON `content-type` in caller-supplied headers broke multipart uploads.** It was only stripped from the package's default headers, so an upload that also needed, say, an `X-Tenant-Id` header silently sent `application/json` and lost the multipart boundary.
+* **A connectivity probe that threw synchronously disabled the check permanently.** An `async` body runs synchronously to its first `await`, so such a probe completed — and cleared the in-flight slot — before that slot was assigned, stranding a completed future that reported offline for the rest of the session.
+* **Cached entries with query parameters collided.** The cache key was the raw url, so `/users` with `params: {'page': 1}` and `page: 2` shared one entry and the second overwrote the first. Query parameters are now part of the key, sorted so argument order does not matter.
+* **The connectivity probe ran before every single request** — a real network round-trip that roughly doubled the latency of a fast API call. A positive result is now reused for `connectivityCacheTtl` (default 5s). Negative results are deliberately never cached, since that is exactly when the user is retrying.
+* **`Failure` discarded the response body**, making `422` field errors unreachable.
+* Interceptor order was assembled across two call sites and did not match the documented order. It is now fixed in one place, with auth before retry so a retried request carries a valid token.
+* `DioExceptionType.badCertificate` mapped to the generic "unexpected error" instead of `connectionFailure`.
+
+### Added
+
+* **`ApiConfig` + `ApiServices.init(...)`** — one object for every setting, replacing `configure()` and the loose static setters. Adds `baseUrl` (so call sites pass `/users`, not the full URL), `connectTimeout`/`receiveTimeout`/`sendTimeout`, and `defaultHeaders`.
+* **Typed responses** — `getAs<T>`, `postAs<T>`, `putAs<T>`, `patchAs<T>`, `deleteAs<T>` take a `parser` and return `Either<Failure, T>`. A throwing parser becomes a `Failure` with `ErrorSource.parseError` carrying the raw body; no exception escapes. `listParser(User.fromJson)` handles list endpoints, with an optional `key` for `{"data": [...]}` wrappers.
+* **Response caching** — `cachePolicy` and `cacheMaxAge` on `get`/`getAs`, with `CachePolicy.cacheFirst`, `networkFirst`, `cacheOnly`, and the default `networkOnly` (unchanged behaviour). `response.isFromCache` tells you which you got. `ApiCacheHelper` was already in the package but nothing called it.
+* **Project-level cache control** — `ApiConfig.cacheEnabled: false` forbids caching outright, overriding any `cachePolicy` a call site passes and never opening the database; `ApiConfig.defaultCachePolicy` sets the policy for calls that don't name one. Not every app should cache, and "just don't pass a policy" relies on every call site getting it right.
+* **`ApiLogOptions.trimBase64`** — collapses base64 blobs in log output. An API returning photographs or fingerprints inline turns a single response into thousands of console lines, because the logger wraps every value at `maxWidth` and has no notion of a field worth hiding. With this on, a blob prints as a recognisable head plus a count of what was elided, and everything else passes through byte for byte. Off by default. `Base64LogTrimmer` is exported for tuning `minRunLength`/`keptChars` or placing the trimmer in front of your own sink.
+* **In-flight de-duplication** — two identical GETs at the same time share one network call. Skipped automatically when you pass your own `CancelToken`, since cancelling one caller must not cancel the other; opt out with `dedupe: false`.
+* **`RetryPolicy`** — configurable `maxRetries`, `baseDelay`, `maxDelay`, `retryableStatusCodes`, and a `retryIf` predicate. Retries now cover status codes as well as transport errors: `429` and `503` for any method (the server told us it did not process the request), `408`/`500`/`502`/`504` for idempotent methods only. `Retry-After` is honoured in both its delta-seconds and HTTP-date forms. Backoff is exponential with full jitter, replacing the lockstep linear interval that made concurrent failures retry in unison.
+* **`ApiConfig.isSuccess`** — treat a `200` carrying `{"success": false}` as a failure, with the message pulled from the body the same way a real error response would be.
+* **`ApiObserver`** — one hook for every request, response, and failure, for Sentry/Crashlytics/analytics. Fires exactly once per call, including for failures Dio never produces an exception for (offline short-circuits, parse errors, `isSuccess` rejections). A throwing observer can never break a request.
+* **`ApiConfig.httpClientAdapter`** — supply your own adapter for certificate pinning or to route through Charles/Proxyman. Deliberately consumer-supplied so the package stays usable on web.
+* **`upload()`** — multipart uploads with progress, taking `UploadFile.fromPath` (mobile/desktop) or `UploadFile.fromBytes` (web, where a picked file has no path). The multipart body is rebuilt before any replay — a `429`/`503` retry or a `401` token refresh — because a `FormData` is a stream that Dio reads once and refuses to read again. A JSON `content-type` is stripped for multipart bodies, including one you pass yourself.
+* **`ApiServices.reset()`** — clears the singleton, config, and loader callbacks. Fixes `setLogging` being silently a no-op after the first `instance()` call, and gives tests a clean slate.
+* **`package:baaba_api_handler/testing.dart`** — ships `FakeApiServices`, an in-memory double with stubbing and call recording, so consumers can test repositories without mocking Dio. An unstubbed endpoint throws a `StateError` naming it rather than quietly returning null.
+* **`Failure.data`, `Failure.statusCode`, `Failure.validationErrors`, `Failure.requestOptions`** — the raw body, the literal HTTP status (`code` collapses anything unrecognised to `defaultError`), per-field errors parsed from a `{"errors": {...}}` body, and the request that failed. `requestOptions` is excluded from equality: it is context about where a failure came from, not part of what the failure is.
+* `package:baaba_api_handler/baaba_api_handler.dart` as the conventional entrypoint. The old `ts_api_handler.dart` import still works.
+
 ## 1.4.0
 
 * Added `ApiLogOptions` — the consuming app now controls what the console logger prints: `enabled`, `request`, `requestHeader`, `requestBody`, `responseHeader`, `responseBody`, `error`, `maxWidth`, `compact`, and `logPrint`. Previously the logger was hardcoded to `requestBody: true` with no way to change it. Includes an `ApiLogOptions.disabled()` constructor and `copyWith`.

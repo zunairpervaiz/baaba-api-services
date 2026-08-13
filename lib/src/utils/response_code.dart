@@ -22,7 +22,11 @@ enum ResponseCode {
   cacheError(-5),
   noInternetConnection(-6),
   defaultError(-7),
-  connectionFailure(-8);
+  connectionFailure(-8),
+
+  /// The request succeeded but the body could not be turned into the
+  /// requested type — see the `*As<T>` methods on `ApiServices`.
+  parseError(-9);
 
   const ResponseCode(this.value);
   final int value;
@@ -58,4 +62,5 @@ ErrorSource mapResponseCodeToEnum(ResponseCode code) => switch (code) {
       ResponseCode.serviceNotAvailable => ErrorSource.serviceNotAvailable,
       ResponseCode.defaultError => ErrorSource.defaultError,
       ResponseCode.connectionFailure => ErrorSource.connectionFailure,
+      ResponseCode.parseError => ErrorSource.parseError,
     };

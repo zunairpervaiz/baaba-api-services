@@ -3,33 +3,38 @@
 /// The logger is only attached in non-release builds — in release nothing is
 /// logged regardless of what you set here.
 ///
-/// Pass an instance to `ApiServices.configure(logging: ...)`, or to
-/// `ApiServices.setLogging(...)` if you don't use token auth. The defaults
-/// match the package's previous behaviour: request line, request body,
-/// response body, and errors.
+/// Pass an instance to `ApiServices.init(ApiConfig(logging: ...))`. The
+/// defaults match the package's previous behaviour: request line, request
+/// body, response body, and errors.
 ///
 /// **Example — quiet logs, headers only when debugging auth:**
 ///
 /// ```dart
-/// ApiServices.configure(
-///   getToken: () async => await storage.read(key: 'token'),
-///   onTokenRefresh: () async => await authRepo.refresh(),
-///   logging: const ApiLogOptions(
+/// ApiServices.init(const ApiConfig(
+///   logging: ApiLogOptions(
 ///     requestBody: false,   // don't print passwords / PII
 ///     requestHeader: true,  // but do show the Authorization header
 ///     responseBody: false,  // responses are large
 ///   ),
-/// );
+/// ));
 /// ```
+///
+/// **Example — an API that returns base64 images inline:**
+///
+/// ```dart
+/// ApiServices.init(const ApiConfig(
+///   logging: ApiLogOptions(requestBody: false, trimBase64: true),
+/// ));
+/// ```
+///
+/// See [trimBase64]. [logPrint] is a sink rather than a switch — every line
+/// passes through it before reaching the console — so you can also rewrite
+/// the stream yourself instead of losing the body.
 ///
 /// **Example — silence logging entirely:**
 ///
 /// ```dart
-/// ApiServices.configure(
-///   getToken: () async => await storage.read(key: 'token'),
-///   onTokenRefresh: () async => await authRepo.refresh(),
-///   logging: const ApiLogOptions.disabled(),
-/// );
+/// ApiServices.init(const ApiConfig(logging: ApiLogOptions.disabled()));
 /// ```
 class ApiLogOptions {
   /// Master switch. When `false` no logger is attached at all and every other
@@ -66,6 +71,28 @@ class ApiLogOptions {
   /// Print JSON in compact form rather than one node per line.
   final bool compact;
 
+  /// Collapse base64 blobs in the output instead of printing them in full.
+  ///
+  /// The logger wraps every value at [maxWidth] and emits one line per 78-odd
+  /// characters, so a response carrying photographs or fingerprints as base64
+  /// becomes tens of thousands of console lines and buries the request that
+  /// caused it. With this on, a blob prints as a recognisable head plus a
+  /// count:
+  ///
+  /// ```
+  /// ║      "data": iVBORw0KGgoAAAANSUhEUg…
+  /// ║      …[412903 base64 chars elided]
+  /// ```
+  ///
+  /// Everything else passes through byte for byte — a `detail` string, a case
+  /// number, a stack trace all read exactly as they did. Off by default,
+  /// because it rewrites the log stream and that should be a choice.
+  ///
+  /// Composes with [logPrint]: the trimmer sits in front, so a custom sink
+  /// receives lines that are already trimmed. For tuning, construct a
+  /// [Base64LogTrimmer] and pass it as [logPrint] instead.
+  final bool trimBase64;
+
   /// Where log lines go. Defaults to `print`.
   ///
   /// Use this to route logs somewhere other than the console — `debugPrint`
@@ -87,6 +114,7 @@ class ApiLogOptions {
     this.error = true,
     this.maxWidth = 90,
     this.compact = true,
+    this.trimBase64 = false,
     this.logPrint,
   });
 
@@ -101,6 +129,7 @@ class ApiLogOptions {
         error = false,
         maxWidth = 90,
         compact = true,
+        trimBase64 = false,
         logPrint = null;
 
   /// Returns a copy with the given fields replaced.
@@ -114,6 +143,7 @@ class ApiLogOptions {
     bool? error,
     int? maxWidth,
     bool? compact,
+    bool? trimBase64,
     void Function(Object object)? logPrint,
   }) {
     return ApiLogOptions(
@@ -126,6 +156,7 @@ class ApiLogOptions {
       error: error ?? this.error,
       maxWidth: maxWidth ?? this.maxWidth,
       compact: compact ?? this.compact,
+      trimBase64: trimBase64 ?? this.trimBase64,
       logPrint: logPrint ?? this.logPrint,
     );
   }

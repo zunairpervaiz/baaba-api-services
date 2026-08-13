@@ -33,6 +33,8 @@ class ResponseStrings {
       'No internet connection. Please check your network.';
   static const String connectionFailure =
       'Failed to connect to the server. Please try again.';
+  static const String parseError =
+      'Received an unexpected response from the server.';
   static const String defaultError =
       'An unexpected error occurred. Please try again.';
 }

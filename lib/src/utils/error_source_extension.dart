@@ -24,6 +24,10 @@ enum ErrorSource {
   noInternetConnection,
   connectionFailure,
   serviceNotAvailable,
+
+  /// The response arrived fine but could not be deserialized into the
+  /// requested type. Added in 2.0.0.
+  parseError,
   defaultError,
 }
 
@@ -79,6 +83,8 @@ extension ErrorSourceExtension on ErrorSource {
             this,
             ResponseCode.serviceNotAvailable,
             ResponseStrings.serviceNotAvailable),
+        ErrorSource.parseError =>
+          Failure(this, ResponseCode.parseError, ResponseStrings.parseError),
         ErrorSource.defaultError => Failure(
             this, ResponseCode.defaultError, ResponseStrings.defaultError),
       };

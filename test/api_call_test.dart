@@ -61,17 +61,20 @@ void runApiTestCases() {
     });
 
     test('POST returns Right(Response) on success', () async {
-      final result = await apiServices.post(endpoint: '/users', data: {'name': 'test'});
+      final result =
+          await apiServices.post(endpoint: '/users', data: {'name': 'test'});
       expect(result.isRight(), isTrue);
     });
 
     test('PUT returns Right(Response) on success', () async {
-      final result = await apiServices.put(endpoint: '/users/1', data: {'name': 'test'});
+      final result =
+          await apiServices.put(endpoint: '/users/1', data: {'name': 'test'});
       expect(result.isRight(), isTrue);
     });
 
     test('PATCH returns Right(Response) on success', () async {
-      final result = await apiServices.patch(endpoint: '/users/1', data: {'name': 'test'});
+      final result =
+          await apiServices.patch(endpoint: '/users/1', data: {'name': 'test'});
       expect(result.isRight(), isTrue);
     });
 
@@ -250,7 +253,8 @@ void runApiTestCases() {
 
     testCases.forEach((responseCode, expectedErrorSource) {
       test('$responseCode maps to $expectedErrorSource', () {
-        expect(mapResponseCodeToEnum(responseCode), equals(expectedErrorSource));
+        expect(
+            mapResponseCodeToEnum(responseCode), equals(expectedErrorSource));
       });
     });
   });

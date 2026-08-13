@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:baaba_api_handler/src/config/retry_policy.dart';
 import 'package:baaba_api_handler/src/interceptors/network_retry_interceptor.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,7 +41,10 @@ void main() {
       dio = Dio(BaseOptions(baseUrl: 'https://example.com'));
       dio.interceptors.add(NetworkRetryInterceptor(
         dio: dio,
-        retryInterval: const Duration(milliseconds: 1),
+        policy: const RetryPolicy(
+          baseDelay: Duration(milliseconds: 1),
+          useJitter: false,
+        ),
       ));
     });
 
@@ -65,7 +69,8 @@ void main() {
         throwsA(isA<DioException>()),
       );
 
-      expect(adapter.callCount, 1); // no retry — would risk duplicate side effects
+      expect(
+          adapter.callCount, 1); // no retry — would risk duplicate side effects
     });
 
     test('gives up after maxRetries and surfaces the error', () async {
@@ -73,8 +78,11 @@ void main() {
       dio.interceptors.removeWhere((i) => i is NetworkRetryInterceptor);
       dio.interceptors.add(NetworkRetryInterceptor(
         dio: dio,
-        maxRetries: 2,
-        retryInterval: const Duration(milliseconds: 1),
+        policy: const RetryPolicy(
+          maxRetries: 2,
+          baseDelay: Duration(milliseconds: 1),
+          useJitter: false,
+        ),
       ));
       dio.httpClientAdapter = adapter;
 

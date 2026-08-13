@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:baaba_api_handler/src/config/auth_config.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
+import 'package:baaba_api_handler/src/utils/replayable_request.dart';
 import 'package:dio/dio.dart';
 
 /// A Dio interceptor that automatically attaches auth headers to every request
@@ -80,6 +82,21 @@ class TokenRefreshInterceptor extends Interceptor {
     this.refreshTimeout = const Duration(seconds: 30),
   }) : _dio = dio;
 
+  /// Builds the interceptor from the [AuthConfig] held by `ApiConfig`.
+  factory TokenRefreshInterceptor.fromConfig({
+    required Dio dio,
+    required AuthConfig config,
+  }) {
+    return TokenRefreshInterceptor(
+      dio: dio,
+      getToken: config.getToken,
+      onTokenRefresh: config.onTokenRefresh,
+      onRefreshFailed: config.onRefreshFailed,
+      headerBuilder: config.headerBuilder,
+      refreshTimeout: config.refreshTimeout,
+    );
+  }
+
   Map<String, String> _buildHeaders(String token) {
     return headerBuilder?.call(token) ?? {authorization: 'Bearer $token'};
   }
@@ -101,7 +118,8 @@ class TokenRefreshInterceptor extends Interceptor {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
-    if (err.response?.statusCode != 401 || _isAlreadyRetried(err.requestOptions)) {
+    if (err.response?.statusCode != 401 ||
+        _isAlreadyRetried(err.requestOptions)) {
       return handler.next(err);
     }
 
@@ -153,6 +171,10 @@ class TokenRefreshInterceptor extends Interceptor {
       err.requestOptions.headers.addAll(_buildHeaders(freshToken));
     }
     err.requestOptions.extra['_tokenRetried'] = true;
+
+    // An upload big enough to outlive its token has already had its multipart
+    // body consumed by the attempt that 401'd.
+    prepareForReplay(err.requestOptions);
 
     try {
       final response = await _dio.fetch(err.requestOptions);
