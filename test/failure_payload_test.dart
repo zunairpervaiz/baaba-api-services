@@ -1,7 +1,6 @@
 import 'package:baaba_api_handler/src/utils/error_body.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/ts_api_handler.dart';
-import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Failure _failureFor(int statusCode, Object? body) {

@@ -24,7 +24,12 @@ class _InMemoryCache implements ApiCacheHelper {
   }
 
   @override
-  Future<bool> setCacheData(String url, String data) async {
+  Future<bool> setCacheData(
+    String url,
+    String data, {
+    int? maxEntries,
+    int? maxBytes,
+  }) async {
     opened = true;
     entries[url] = data;
     return true;

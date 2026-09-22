@@ -57,6 +57,47 @@ void main() {
       expect(capturedAuthHeader, 'Bearer my-token');
     });
 
+    test('holds the refresh guard until the replay finishes', () async {
+      // The replay is awaited, not merely returned, so the `finally` that
+      // clears _isRefreshing cannot run while it is still in flight. If it
+      // did, a 401 arriving during that window would see no refresh in
+      // progress and start a second one — the stampede this interceptor
+      // exists to prevent, and a real hazard when the backend rotates the
+      // refresh token.
+      var refreshCount = 0;
+
+      dio.httpClientAdapter = _MockAdapter((options) async {
+        if (options.extra['_tokenRetried'] != true) return _unauthorized();
+        // Only the first request's replay is slow; that delay *is* the
+        // window under test.
+        if (options.path == '/slow') {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        return _ok();
+      });
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => 'token',
+        onTokenRefresh: () async {
+          refreshCount++;
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+          return true;
+        },
+      ));
+
+      final slow = dio.get<dynamic>('/slow');
+      // Long enough for /slow to have 401'd, refreshed, and started replaying.
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      final second = dio.get<dynamic>('/second');
+
+      final responses = await Future.wait([slow, second]);
+
+      expect(refreshCount, 1,
+          reason: 'the second 401 should reuse the in-flight refresh');
+      expect(responses.map((r) => r.statusCode), everyElement(200));
+    });
+
     test('retries on 401 and succeeds after token refresh', () async {
       int callCount = 0;
       int refreshCount = 0;

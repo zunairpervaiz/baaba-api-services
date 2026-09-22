@@ -27,7 +27,12 @@ class _InMemoryCache implements ApiCacheHelper {
   }
 
   @override
-  Future<bool> setCacheData(String url, String data) async {
+  Future<bool> setCacheData(
+    String url,
+    String data, {
+    int? maxEntries,
+    int? maxBytes,
+  }) async {
     entries[url] = data;
     return true;
   }
@@ -43,6 +48,8 @@ class _InMemoryCache implements ApiCacheHelper {
 }
 
 void main() {
+  runNonGetCachingTests();
+
   late MockDio mockDio;
   late MockNetworkInfo mockNetworkInfo;
   late _InMemoryCache cache;
@@ -312,6 +319,115 @@ void main() {
 
       expect(get, isNot(post));
       expect(post, isNot(postB));
+    });
+  });
+}
+
+/// A project-wide `defaultCachePolicy` must not leak onto methods that never
+/// offer a `cachePolicy` argument.
+///
+/// It looks self-enforcing — only `get`/`getAs` expose the parameter — but the
+/// default applies to every request that does not name one. Left unchecked, a
+/// second identical `POST /orders` is answered from the cache and never
+/// reaches the server.
+void runNonGetCachingTests() {
+  group('defaultCachePolicy is GET-only', () {
+    late MockDio mockDio;
+    late MockNetworkInfo mockNetworkInfo;
+    late _InMemoryCache cache;
+    late ApiServices api;
+    late int networkCalls;
+
+    setUpAll(() {
+      registerFallbackValue(Options());
+      registerFallbackValue(CancelToken());
+    });
+
+    setUp(() {
+      networkCalls = 0;
+      mockDio = MockDio();
+      mockNetworkInfo = MockNetworkInfo();
+      cache = _InMemoryCache();
+      when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => true);
+      when(() => mockDio.request<dynamic>(
+            any(),
+            data: any(named: 'data'),
+            queryParameters: any(named: 'queryParameters'),
+            options: any(named: 'options'),
+            cancelToken: any(named: 'cancelToken'),
+            onSendProgress: any(named: 'onSendProgress'),
+            onReceiveProgress: any(named: 'onReceiveProgress'),
+          )).thenAnswer((invocation) async {
+        networkCalls++;
+        return Response<dynamic>(
+          requestOptions: RequestOptions(
+              path: invocation.positionalArguments.first as String),
+          statusCode: 200,
+          data: {'call': networkCalls},
+        );
+      });
+
+      ApiServices.init(const ApiConfig(
+        baseUrl: 'https://api.test',
+        defaultCachePolicy: CachePolicy.cacheFirst,
+      ));
+      api = ApiServicesImplementation.instanceFor(
+        dio: mockDio,
+        networkInfo: mockNetworkInfo,
+        cacheHelper: cache,
+      );
+    });
+
+    tearDown(ApiServices.reset);
+
+    test('a repeated POST always reaches the network', () async {
+      await api.post(endpoint: '/orders', data: {'item': 1});
+      final second = await api.post(endpoint: '/orders', data: {'item': 1});
+
+      expect(networkCalls, 2,
+          reason: 'a write must never be served from cache');
+      expect(second.getRight().toNullable()!.isFromCache, isFalse);
+      expect(cache.entries, isEmpty, reason: 'and must not be stored either');
+    });
+
+    test('put, patch and delete are not cached', () async {
+      await api.put(endpoint: '/users/1', data: {'a': 1});
+      await api.put(endpoint: '/users/1', data: {'a': 1});
+      await api.patch(endpoint: '/users/1', data: {'a': 1});
+      await api.patch(endpoint: '/users/1', data: {'a': 1});
+      await api.delete(endpoint: '/users/1');
+      await api.delete(endpoint: '/users/1');
+
+      expect(networkCalls, 6);
+      expect(cache.entries, isEmpty);
+    });
+
+    test('head and options are not cached', () async {
+      await api.head(endpoint: '/files/a.pdf');
+      await api.head(endpoint: '/files/a.pdf');
+      await api.options(endpoint: '/users');
+      await api.options(endpoint: '/users');
+
+      expect(networkCalls, 4);
+      expect(cache.entries, isEmpty);
+    });
+
+    test('a POST cannot poison the GET entry for the same path', () async {
+      // Cache keys carry no method, so an unfiltered POST write would be
+      // served straight back to a GET of the same path.
+      await api.post(endpoint: '/orders', data: {'item': 1});
+      final read = await api.get(endpoint: '/orders');
+
+      expect(read.getRight().toNullable()!.isFromCache, isFalse);
+      expect(networkCalls, 2);
+    });
+
+    test('GET still honours the project-wide policy', () async {
+      await api.get(endpoint: '/products');
+      final second = await api.get(endpoint: '/products');
+
+      expect(networkCalls, 1);
+      expect(second.getRight().toNullable()!.isFromCache, isTrue);
     });
   });
 }

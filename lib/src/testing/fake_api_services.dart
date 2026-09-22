@@ -20,6 +20,10 @@ class RecordedCall {
   /// Files passed to `upload`. Empty for every other method.
   final List<UploadFile> files;
 
+  /// The `tag` the call was made under, or `null` if it was untagged. Lets a
+  /// test assert that a screen's requests are tagged for cancellation.
+  final String? tag;
+
   const RecordedCall({
     required this.method,
     required this.endpoint,
@@ -27,6 +31,7 @@ class RecordedCall {
     this.params,
     this.headers,
     this.files = const [],
+    this.tag,
   });
 
   @override
@@ -72,6 +77,10 @@ class FakeApiServices implements ApiServices {
 
   /// Reasons passed to [cancelRequest], in order.
   final List<String> cancellations = [];
+
+  /// The `tag` passed to each [cancelRequest] call, in order — `null` for a
+  /// call that cancelled everything. Parallel to [cancellations].
+  final List<String?> cancelledTags = [];
 
   static String _key(HttpMethod method, String endpoint) =>
       '${method.value} $endpoint';
@@ -164,6 +173,7 @@ class FakeApiServices implements ApiServices {
     _stubs.clear();
     _recordedCalls.clear();
     cancellations.clear();
+    cancelledTags.clear();
   }
 
   Future<Either<Failure, Response>> _respond(
@@ -173,6 +183,7 @@ class FakeApiServices implements ApiServices {
     Map<String, dynamic>? params,
     Map<String, String>? headers,
     List<UploadFile> files = const [],
+    String? tag,
   }) async {
     _recordedCalls.add(RecordedCall(
       method: method,
@@ -181,6 +192,7 @@ class FakeApiServices implements ApiServices {
       params: params,
       headers: headers,
       files: files,
+      tag: tag,
     ));
 
     final queue = _stubs[_key(method, endpoint)];
@@ -203,6 +215,7 @@ class FakeApiServices implements ApiServices {
     Object? data,
     Map<String, dynamic>? params,
     Map<String, String>? headers,
+    String? tag,
   }) async {
     final result = await _respond(
       method,
@@ -210,6 +223,7 @@ class FakeApiServices implements ApiServices {
       data: data,
       params: params,
       headers: headers,
+      tag: tag,
     );
     return result.fold(
       (failure) => left<Failure, T>(failure),
@@ -244,13 +258,15 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
     bool dedupe = true,
   }) {
     return _respond(HttpMethod.get, endpoint,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -265,13 +281,15 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
     bool dedupe = true,
   }) {
     return _respondAs(HttpMethod.get, endpoint, parser,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -285,10 +303,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respond(HttpMethod.post, endpoint,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -303,10 +323,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respondAs(HttpMethod.post, endpoint, parser,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -320,10 +342,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respond(HttpMethod.put, endpoint,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -338,10 +362,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respondAs(HttpMethod.put, endpoint, parser,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -355,10 +381,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respond(HttpMethod.delete, endpoint,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -373,10 +401,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respondAs(HttpMethod.delete, endpoint, parser,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -390,10 +420,12 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respond(HttpMethod.patch, endpoint,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -408,10 +440,45 @@ class FakeApiServices implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respondAs(HttpMethod.patch, endpoint, parser,
-        data: data, params: params, headers: headers);
+        data: data, params: params, headers: headers, tag: tag);
+  }
+
+  @override
+  Future<Either<Failure, Response>> head({
+    required String endpoint,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    CancelToken? cancelToken,
+    String? tag,
+    bool showLoader = true,
+    bool dedupe = true,
+  }) {
+    return _respond(HttpMethod.head, endpoint,
+        params: params, headers: headers, tag: tag);
+  }
+
+  @override
+  Future<Either<Failure, Response>> options({
+    required String endpoint,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
+    bool showLoader = true,
+    bool dedupe = true,
+  }) {
+    return _respond(HttpMethod.options, endpoint,
+        params: params, headers: headers, tag: tag);
   }
 
   @override
@@ -426,10 +493,12 @@ class FakeApiServices implements ApiServices {
     Map<String, String>? headers,
     ProgressCallback? onSendProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _respond(method, endpoint,
-        data: fields, params: params, headers: headers, files: files);
+        data: fields, params: params, headers: headers, files: files, tag: tag);
   }
 
   @override
@@ -442,15 +511,17 @@ class FakeApiServices implements ApiServices {
     Map<String, String>? headers,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    String? tag,
     bool deleteOnError = true,
     bool showLoader = true,
   }) {
     return _respond(HttpMethod.get, endpoint,
-        data: savePath, params: params, headers: headers);
+        data: savePath, params: params, headers: headers, tag: tag);
   }
 
   @override
-  void cancelRequest({String cancellationReason = ''}) {
+  void cancelRequest({String? tag, String cancellationReason = ''}) {
     cancellations.add(cancellationReason);
+    cancelledTags.add(tag);
   }
 }

@@ -59,6 +59,13 @@ class TokenRefreshInterceptor extends Interceptor {
   /// ```
   final Map<String, String> Function(String token)? headerBuilder;
 
+  /// Decides which hosts the token may be sent to. See
+  /// [AuthConfig.sendTokenTo].
+  ///
+  /// `null` falls back to "same host as the client's `baseUrl`", or, when no
+  /// `baseUrl` is set, every host.
+  final bool Function(Uri uri)? sendTokenTo;
+
   /// Bounds how long a request that arrives while a refresh is already in
   /// flight will wait for that refresh to finish before giving up.
   ///
@@ -79,6 +86,7 @@ class TokenRefreshInterceptor extends Interceptor {
     required this.onTokenRefresh,
     this.onRefreshFailed,
     this.headerBuilder,
+    this.sendTokenTo,
     this.refreshTimeout = const Duration(seconds: 30),
   }) : _dio = dio;
 
@@ -93,6 +101,7 @@ class TokenRefreshInterceptor extends Interceptor {
       onTokenRefresh: config.onTokenRefresh,
       onRefreshFailed: config.onRefreshFailed,
       headerBuilder: config.headerBuilder,
+      sendTokenTo: config.sendTokenTo,
       refreshTimeout: config.refreshTimeout,
     );
   }
@@ -101,11 +110,49 @@ class TokenRefreshInterceptor extends Interceptor {
     return headerBuilder?.call(token) ?? {authorization: 'Bearer $token'};
   }
 
+  /// Whether this request is one of ours, and so may carry the token.
+  ///
+  /// The client can reach any host — `ApiConfig.baseUrl` documents absolute
+  /// endpoints as a supported way to hit a CDN or a third party — so without
+  /// this check a session token travels to whoever the caller names. Beyond
+  /// the leak, it actively breaks S3 presigned URLs, which are rejected when
+  /// an `Authorization` header accompanies the presigned signature.
+  bool _shouldAttach(RequestOptions options) {
+    final Uri uri;
+    try {
+      uri = options.uri;
+    } catch (_) {
+      // An endpoint we cannot even resolve to a URI is not one we can confirm
+      // is ours.
+      return false;
+    }
+
+    final predicate = sendTokenTo;
+    if (predicate != null) {
+      try {
+        return predicate(uri);
+      } catch (_) {
+        // Fail closed: a broken predicate must not leak the token.
+        return false;
+      }
+    }
+
+    // No baseUrl means nothing to compare against, so there is no basis to
+    // withhold the token — and withholding it would break every client that
+    // works purely in absolute urls.
+    final baseHost = Uri.tryParse(_dio.options.baseUrl)?.host;
+    if (baseHost == null || baseHost.isEmpty) return true;
+
+    return uri.host == baseHost;
+  }
+
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    if (!_shouldAttach(options)) return handler.next(options);
+
     final token = await getToken();
     if (token != null) {
       options.headers.addAll(_buildHeaders(token));
@@ -118,7 +165,12 @@ class TokenRefreshInterceptor extends Interceptor {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
+    // A 401 from a host we never sent the token to says nothing about our
+    // token. Refreshing on it wastes a round trip, and a refresh that then
+    // fails would fire onRefreshFailed — logging the user out because a
+    // third-party CDN rejected a request.
     if (err.response?.statusCode != 401 ||
+        !_shouldAttach(err.requestOptions) ||
         _isAlreadyRetried(err.requestOptions)) {
       return handler.next(err);
     }
@@ -147,7 +199,12 @@ class TokenRefreshInterceptor extends Interceptor {
       _refreshCompleter!.complete(refreshed);
 
       if (refreshed) {
-        return _retryRequest(err, handler);
+        // Awaited, not just returned. `finally` below clears _isRefreshing,
+        // and an un-awaited return runs it while the replay is still in
+        // flight — so a second 401 arriving in that window would see no
+        // refresh in progress and start a redundant one, which is the
+        // stampede this interceptor exists to prevent.
+        return await _retryRequest(err, handler);
       } else {
         onRefreshFailed?.call();
         return handler.next(err);

@@ -18,10 +18,13 @@ class DioFactory {
   /// 1. [TokenRefreshInterceptor] — attaches auth headers on the way out; on a
   ///    `401`, refreshes and replays. First, so that a replayed request still
   ///    passes through everything below it.
-  /// 2. [NetworkRetryInterceptor] — retries transient failures. After auth, so
+  /// 2. `ApiConfig.interceptors` — the caller's own, if any. After auth so
+  ///    they can sign or amend an already-authenticated request; before retry
+  ///    and the logger so replays re-run them and the log shows their work.
+  /// 3. [NetworkRetryInterceptor] — retries transient failures. After auth, so
   ///    a retry carries a valid token.
-  /// 3. [PrettyDioLogger] — non-release builds only.
-  /// 4. [ObserverInterceptor] — last, so it reports the final outcome rather
+  /// 4. [PrettyDioLogger] — non-release builds only.
+  /// 5. [ObserverInterceptor] — last, so it reports the final outcome rather
   ///    than each failure the chain above went on to recover from.
   Dio getDio({ApiConfig config = const ApiConfig()}) {
     final dio = Dio(BaseOptions(
@@ -42,6 +45,12 @@ class DioFactory {
       dio.interceptors
           .add(TokenRefreshInterceptor.fromConfig(dio: dio, config: auth));
     }
+
+    // After auth, so a signing interceptor sees the Authorization header it
+    // has to cover. Before retry, so a replayed request passes through them
+    // again rather than carrying a stale timestamp, and before the logger, so
+    // what the caller adds is what gets printed.
+    dio.interceptors.addAll(config.interceptors);
 
     dio.interceptors
         .add(NetworkRetryInterceptor(dio: dio, policy: config.retry));

@@ -22,6 +22,8 @@ result.fold(
 - [Making requests](#making-requests)
   - [Typed responses](#typed-responses)
   - [Request parameters](#request-parameters)
+  - [Response types](#response-types)
+  - [HEAD and OPTIONS](#head-and-options)
   - [Uploads](#uploads)
   - [Downloads](#downloads)
   - [Cancellation](#cancellation)
@@ -29,7 +31,11 @@ result.fold(
   - [Validation errors](#validation-errors)
   - [Success that isn't](#success-that-isnt)
 - [Authentication](#authentication)
+- [Interceptors](#interceptors)
+- [Concurrency](#concurrency)
+- [Connectivity checks](#connectivity-checks)
 - [Caching](#caching)
+  - [Bounding the cache](#bounding-the-cache)
 - [Retries](#retries)
 - [Observability](#observability)
 - [Loading indicator](#loading-indicator)
@@ -149,6 +155,47 @@ Shared by every HTTP method:
 
 `get` and `getAs` additionally accept `cachePolicy`, `cacheMaxAge`, and `dedupe` — see [Caching](#caching).
 
+### Response types
+
+Bodies are decoded as JSON by default. Pass `responseType` for anything else — an image you want in memory, or an endpoint that returns plain text:
+
+```dart
+// Raw bytes, without writing to disk the way download() does.
+final logo = await api.get(
+  endpoint: '/assets/logo.png',
+  responseType: ResponseType.bytes,
+);
+
+// Text that isn't JSON.
+final csv = await api.get(
+  endpoint: '/reports/export.csv',
+  responseType: ResponseType.plain,
+);
+```
+
+It works on every method, including the `*As<T>` variants, where the parser then receives whatever the response type produced rather than decoded JSON.
+
+For a file you want on disk rather than in memory, use [`download`](#downloads) — it streams and never holds the whole body.
+
+---
+
+### HEAD and OPTIONS
+
+`head` asks for headers without a body — useful to check that a resource exists, or to read its `Content-Length` before committing to a download:
+
+```dart
+final result = await api.head(endpoint: '/files/report.pdf');
+
+final size = result.fold(
+  (_) => null,
+  (response) => response.headers.value('content-length'),
+);
+```
+
+`options` asks the server which methods apply to a resource. Both are idempotent, so transient failures are retried just like a `get`.
+
+---
+
 ### Uploads
 
 ```dart
@@ -197,6 +244,18 @@ void onClose() {
   super.onClose();
 }
 ```
+
+That is all-or-nothing, so a screen tearing down would abort requests belonging to screens still on the stack. Tag the requests you want to cancel together:
+
+```dart
+await api.get(endpoint: '/feed', tag: 'feed');
+await api.get(endpoint: '/stories', tag: 'feed');
+
+// Cancels only those two.
+api.cancelRequest(tag: 'feed', cancellationReason: 'Left the feed');
+```
+
+Untagged requests are cancelled only by a call that omits `tag`. A tagged request opts out of [de-duplication](#de-duplication), for the same reason a caller-supplied `CancelToken` does: cancelling one tag must not abort a collapsed request another caller is still waiting on.
 
 For a single request, pass your own `CancelToken`.
 
@@ -248,6 +307,23 @@ ApiServices.init(ApiConfig(
 ));
 ```
 
+By itself that produces a generic `badRequest` failure, which throws away any error code the body carried. Add `onRejected` to build the `Failure` yourself:
+
+```dart
+ApiServices.init(ApiConfig(
+  isSuccess: (r) => r.data is! Map || r.data['success'] != false,
+  onRejected: (r) => Failure(
+    ErrorSource.forbidden,
+    ResponseCode.forbidden,
+    r.data['message'] as String? ?? 'Request failed',
+    data: r.data,
+    statusCode: r.statusCode,
+  ),
+));
+```
+
+Return `null` to fall back to the generic failure. It is only consulted when `isSuccess` returns `false`.
+
 ---
 
 ## Authentication
@@ -282,6 +358,86 @@ AuthConfig(
 
 Omit `auth` entirely for an unauthenticated client; `401`s then surface as an ordinary `Failure`.
 
+### Which hosts get the token
+
+By default, only the host in your `baseUrl`.
+
+That matters because `baseUrl` supports absolute endpoints, so one client can reach a CDN, an S3 presigned URL, or a third-party API. Sending the token to all of them leaks your session to whoever the caller names — and it *breaks* presigned URLs outright, since S3 rejects a request carrying both a presigned signature and an `Authorization` header.
+
+To span several hosts you own:
+
+```dart
+auth: AuthConfig(
+  getToken: getToken,
+  onTokenRefresh: refresh,
+  sendTokenTo: (uri) => uri.host.endsWith('.mycompany.com'),
+),
+```
+
+The check is by host, so a different port or scheme on the same host still receives the token — use the predicate if that matters to you. A predicate that throws is treated as "don't send". When `baseUrl` isn't set there's nothing to compare against and the token goes everywhere.
+
+A `401` from a host the token was never sent to won't trigger a refresh, which also means a third party's `401` can't cascade into `onRefreshFailed` and sign your user out.
+
+---
+
+## Interceptors
+
+`ApiObserver` can watch a request but not change it. For anything that needs to *modify* one — a correlation id, a tenant header computed at call time, request signing, a router that serves fixtures during local development — pass your own Dio interceptors:
+
+```dart
+ApiServices.init(ApiConfig(
+  interceptors: [
+    InterceptorsWrapper(onRequest: (options, handler) {
+      options.headers['X-Correlation-Id'] = const Uuid().v4();
+      handler.next(options);
+    }),
+  ],
+));
+```
+
+They sit **after auth and before retry**. After auth, so a signing interceptor sees the `Authorization` header it has to cover. Before retry and the logger, so a replayed request passes through them again — a signature carrying a timestamp is regenerated per attempt rather than replayed stale — and so what you add is what gets logged.
+
+They run in the order given, and are applied when the client is built, so changing them means calling `init` again.
+
+> A retry replays the **same** `RequestOptions` instance rather than a copy. Read a header off it after the fact and you see the last attempt's value, not the one that attempt sent.
+
+---
+
+## Concurrency
+
+A screen that fires twenty requests on mount sends all twenty at once. On a mobile connection that saturates the connection pool — every request reports a worse latency than it would have alone — and it is a reliable way to trip server-side rate limiting that your retry policy then has to clean up.
+
+```dart
+ApiServices.init(const ApiConfig(maxConcurrentRequests: 6));
+```
+
+Requests past the cap queue in the order they were made and start as slots free up. The cap governs actual network calls: a cache hit and a request collapsed by [de-duplication](#de-duplication) don't consume a slot. A queued request is still cancellable, and still holds the loading indicator — it's pending, not finished.
+
+Unset by default, which is unlimited.
+
+---
+
+## Connectivity checks
+
+Every request runs a pre-flight connectivity probe, so an offline call fails fast with `ErrorSource.noInternetConnection` instead of waiting out a timeout. A positive result is reused for `connectivityCacheTtl` (5s by default); a negative one is never cached, since that is exactly when the user is hammering retry.
+
+The default probe reaches third-party hosts. That is wrong often enough to matter — corporate networks block it, privacy reviews object to it, and it says nothing about whether *your* API is up. Point it at your own health endpoint:
+
+```dart
+ApiServices.init(ApiConfig(
+  connectivityProbe: () async {
+    try {
+      final res = await Dio().head('https://api.example.com/health');
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  },
+));
+```
+
+It must not throw — one that does is read as "offline". To skip the check entirely, use `bypassConnectivityCheck: true`.
+
 ---
 
 ## Caching
@@ -310,6 +466,26 @@ result.fold(
 | `cacheFirst` | Fresh hit → return it, no network. Miss or stale → network, then store. |
 | `networkFirst` | Network → store and return. On failure → fall back to the cache; if nothing is cached, the original failure is returned unchanged. |
 | `cacheOnly` | Hit → return. Miss → `Failure` with `ErrorSource.cacheError`. Never touches the network. |
+
+Only `get` and `getAs` ever read or write the cache — a project-wide policy does not leak onto `post`, `put`, `patch`, `delete`, `head` or `options`, so a write is never answered from a cached response.
+
+### Bounding the cache
+
+Left alone the cache only grows: every distinct url and query combination adds an entry that nothing removes. `cacheMaxAge` does not help — it discards a stale entry when something *reads* it, so a key that is never requested again is never reclaimed.
+
+Set a bound and the oldest entries are evicted to make room:
+
+```dart
+ApiServices.init(const ApiConfig(
+  defaultCachePolicy: CachePolicy.networkFirst,
+  cacheMaxEntries: 500,
+  cacheMaxBytes: 5 * 1024 * 1024,
+));
+```
+
+Both are optional and apply together — whichever binds first. "Oldest" means least recently *written*, not least recently read: tracking reads would mean a disk write on every cache hit, costing more than the eviction saves. A single response larger than `cacheMaxBytes` is still stored; the cap governs the total.
+
+Leave both unset and the cache stays unbounded, exactly as before — nothing is tracked and nothing is evicted.
 
 ### Project-level control
 
@@ -607,16 +783,22 @@ Every field on `ApiConfig`:
 | `defaultHeaders` | `{}` | Merged into every request. |
 | `bypassConnectivityCheck` | `false` | Skip the pre-flight internet check — needed behind proxies that block the probe. |
 | `connectivityCacheTtl` | `5s` | How long a positive connectivity result is reused. |
+| `connectivityProbe` | `null` | Replaces the default third-party ping with your own check. |
 | `logging` | `ApiLogOptions()` | Console logger settings. |
 | `retry` | `RetryPolicy()` | How transient failures are retried. |
 | `cacheEnabled` | `true` | Master switch. `false` forbids caching outright, whatever a call site asks for. |
 | `defaultCachePolicy` | `networkOnly` | Policy for `get`/`getAs` calls that don't name one. |
+| `cacheMaxEntries` | `null` | Cap on cached entries; oldest are evicted past it. Unbounded when unset. |
+| `cacheMaxBytes` | `null` | Cap on total cached bytes, evicting the same way. Unbounded when unset. |
 | `isSuccess` | `null` | Reject a `2xx` whose body says otherwise. |
+| `onRejected` | `null` | Builds the `Failure` for a response `isSuccess` rejected. |
 | `httpClientAdapter` | `null` | Certificate pinning, proxies. |
 | `observer` | `null` | Request/response/failure hook. |
+| `interceptors` | `[]` | Your own Dio interceptors, inserted after auth and before retry. |
+| `maxConcurrentRequests` | `null` | Cap on requests in flight at once. Unlimited when unset. |
 | `auth` | `null` | Token auth and refresh. |
 
-Settings read at request time — `bypassConnectivityCheck`, `isSuccess` — take effect immediately. Settings baked into the Dio client — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `observer`, `httpClientAdapter` — apply to the client built by `init`, so changing them means calling `init` again.
+Settings read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheMaxEntries`, `cacheMaxBytes` — take effect immediately. Settings baked into the Dio client — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `observer`, `httpClientAdapter` — apply to the client built by `init`, so changing them means calling `init` again.
 
 ---
 

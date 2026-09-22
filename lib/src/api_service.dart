@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:baaba_api_handler/src/api_cache_helper.dart';
@@ -140,7 +142,10 @@ abstract interface class ApiServices {
     _config = config;
     _instance = ApiServicesImplementation.instanceFor(
       dio: DioFactory().getDio(config: config),
-      networkInfo: NetworkInfo(cacheTtl: config.connectivityCacheTtl),
+      networkInfo: NetworkInfo(
+        cacheTtl: config.connectivityCacheTtl,
+        probe: config.connectivityProbe,
+      ),
     );
   }
 
@@ -162,7 +167,10 @@ abstract interface class ApiServices {
   static ApiServices instance([Dio? dio]) {
     _instance ??= ApiServicesImplementation.instanceFor(
       dio: dio ?? DioFactory().getDio(config: _config),
-      networkInfo: NetworkInfo(cacheTtl: _config.connectivityCacheTtl),
+      networkInfo: NetworkInfo(
+        cacheTtl: _config.connectivityCacheTtl,
+        probe: _config.connectivityProbe,
+      ),
     );
     return _instance!;
   }
@@ -331,6 +339,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
@@ -366,6 +376,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
@@ -399,6 +411,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -414,6 +428,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -440,6 +456,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -455,6 +473,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -483,6 +503,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -498,6 +520,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -523,6 +547,8 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -538,7 +564,58 @@ abstract interface class ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
+  });
+
+  /// Sends a HEAD request to [endpoint].
+  ///
+  /// Identical to [get] except that the server returns headers only and no
+  /// body — use it to check whether a resource exists, read its
+  /// `Content-Length` before committing to a download, or test a
+  /// `Last-Modified` without paying for the payload.
+  ///
+  /// ```dart
+  /// final result = await _api.head(endpoint: '/files/report.pdf');
+  /// final size = result.fold(
+  ///   (_) => null,
+  ///   (response) => response.headers.value('content-length'),
+  /// );
+  /// ```
+  ///
+  /// Idempotent, so transient failures are retried like a [get]. Takes no
+  /// `responseType`: there is no body for one to apply to.
+  Future<Either<Failure, Response>> head({
+    required String endpoint,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    CancelToken? cancelToken,
+    String? tag,
+    bool showLoader = true,
+    bool dedupe = true,
+  });
+
+  /// Sends an OPTIONS request to [endpoint].
+  ///
+  /// Asks the server which methods and CORS rules apply to a resource. Rarely
+  /// needed from app code — browsers issue their own preflights — but useful
+  /// for capability discovery against an API that advertises itself this way.
+  ///
+  /// Idempotent, so transient failures are retried like a [get].
+  Future<Either<Failure, Response>> options({
+    required String endpoint,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
+    bool showLoader = true,
+    bool dedupe = true,
   });
 
   /// Uploads files as a multipart request, alongside any ordinary form
@@ -577,6 +654,8 @@ abstract interface class ApiServices {
     Map<String, String>? headers,
     ProgressCallback? onSendProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   });
 
@@ -609,16 +688,18 @@ abstract interface class ApiServices {
     Map<String, String>? headers,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    String? tag,
     bool deleteOnError = true,
     bool showLoader = true,
   });
 
-  /// Cancels all in-flight requests.
+  /// Cancels in-flight requests — every one of them, or just those made under
+  /// a [tag].
   ///
   /// Call this when leaving a screen to abort any pending requests that are
   /// no longer needed (e.g. in `onClose` / `dispose`).
   ///
-  /// **Example:**
+  /// **Cancel everything** (omit [tag]):
   ///
   /// ```dart
   /// @override
@@ -627,7 +708,20 @@ abstract interface class ApiServices {
   ///   super.onClose();
   /// }
   /// ```
-  void cancelRequest({String cancellationReason = ''});
+  ///
+  /// **Cancel one screen's requests.** Without [tag] this is all-or-nothing,
+  /// so a screen tearing down would abort requests belonging to screens still
+  /// on the stack. Pass the same tag to the requests and to the cancel:
+  ///
+  /// ```dart
+  /// await _api.get(endpoint: '/feed', tag: 'feed');
+  /// await _api.get(endpoint: '/stories', tag: 'feed');
+  ///
+  /// _api.cancelRequest(tag: 'feed', cancellationReason: 'Left the feed');
+  /// ```
+  ///
+  /// Untagged requests are cancelled only by a call that omits [tag].
+  void cancelRequest({String? tag, String cancellationReason = ''});
 }
 
 class ApiServicesImplementation implements ApiServices {
@@ -640,11 +734,16 @@ class ApiServicesImplementation implements ApiServices {
     accept: applicationJson,
   };
 
-  // Tracks every active CancelToken so cancelRequest() can cancel all of them.
-  final Set<CancelToken> _activeTokens = {};
+  // Tracks every active CancelToken, against the tag its request was made
+  // under (null when it was made without one), so cancelRequest() can cancel
+  // either everything or just one screen's worth.
+  final Map<CancelToken, String?> _activeTokens = {};
 
   // Identical GETs in flight at the same time share one network call.
   final Map<String, Future<Either<Failure, Response>>> _inFlight = {};
+
+  // Caps how many requests actually reach the network at once.
+  final _RequestGate _gate;
 
   // Reference-counted so concurrent requests share one indicator: onShow
   // fires only for the first in-flight request, onHide only once none remain.
@@ -656,7 +755,8 @@ class ApiServicesImplementation implements ApiServices {
     ApiCacheHelper? cacheHelper,
   })  : _dio = dio,
         _networkInfo = networkInfo ?? NetworkInfo(),
-        _cacheOverride = cacheHelper;
+        _cacheOverride = cacheHelper,
+        _gate = _RequestGate(ApiServices._config.maxConcurrentRequests);
 
   factory ApiServicesImplementation.instanceFor({
     required Dio dio,
@@ -691,6 +791,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
@@ -713,6 +815,8 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         cachePolicy: cachePolicy,
         cacheMaxAge: cacheMaxAge,
         dedupe: dedupe,
@@ -734,11 +838,13 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
     bool dedupe = false,
   }) async {
-    final policy = _effectiveCachePolicy(cachePolicy);
+    final policy = _effectiveCachePolicy(method, cachePolicy);
 
     final cacheKey = policy == CachePolicy.networkOnly
         ? null
@@ -767,6 +873,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
       dedupe: dedupe,
     );
 
@@ -813,12 +921,18 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool dedupe = false,
   }) {
     // A caller-supplied token is theirs to cancel. Sharing one network call
     // between two callers would let either of them cancel the other's request,
     // so opt out rather than surprise them.
-    final canDedupe = dedupe && cancelToken == null;
+    //
+    // A tag is the same hazard by another name: cancelRequest(tag: 'feed')
+    // would abort a collapsed request that a caller under a different tag —
+    // or no tag at all — is still waiting on. Both opt out.
+    final canDedupe = dedupe && cancelToken == null && tag == null;
     if (!canDedupe) {
       return _performRequest(
         method,
@@ -831,6 +945,8 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
       );
     }
 
@@ -856,6 +972,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
     );
     _inFlight[key] = future;
 
@@ -876,12 +994,17 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
   }) async {
     final offline = await _checkConnectivity();
     if (offline != null) return left(offline);
 
     final token = cancelToken ?? CancelToken();
-    _activeTokens.add(token);
+    // Registered before queuing, not after, so a request still waiting for a
+    // slot can be cancelled like any other.
+    _activeTokens[token] = tag;
+    await _gate.acquire();
     try {
       final response = await _dio.request(
         endpoint,
@@ -891,6 +1014,7 @@ class ApiServicesImplementation implements ApiServices {
           method: method.value,
           receiveTimeout: receiveTimeout,
           sendTimeout: sendTimeout,
+          responseType: responseType,
           headers: _headersFor(data, headers),
         ),
         cancelToken: token,
@@ -901,6 +1025,7 @@ class ApiServicesImplementation implements ApiServices {
     } catch (e) {
       return left(_toFailure(e));
     } finally {
+      _gate.release();
       _activeTokens.remove(token);
     }
   }
@@ -910,9 +1035,21 @@ class ApiServicesImplementation implements ApiServices {
   /// `ApiConfig.cacheEnabled: false` wins over anything a call site asked for,
   /// so a project that must not persist responses cannot be undone by one
   /// stray `cachePolicy:` argument.
-  CachePolicy _effectiveCachePolicy(CachePolicy? requested) {
+  ///
+  /// **Caching is GET-only, and that has to be enforced here rather than left
+  /// to the method signatures.** Only `get`/`getAs` expose a `cachePolicy`
+  /// parameter, so the contract looks self-enforcing — but
+  /// `ApiConfig.defaultCachePolicy` applies to every request that does not
+  /// name one, which is every `post`, `put`, `patch`, `delete`, `head` and
+  /// `options` there is. A project that set a project-wide policy would have
+  /// its writes served from the cache: the second identical `POST /orders`
+  /// would return the first one's response without ever reaching the server.
+  /// Cache keys carry no method or body either, so a `POST` and a `GET` to one
+  /// path share an entry.
+  CachePolicy _effectiveCachePolicy(HttpMethod method, CachePolicy? requested) {
     final config = ApiServices._config;
     if (!config.cacheEnabled) return CachePolicy.networkOnly;
+    if (method != HttpMethod.get) return CachePolicy.networkOnly;
     return requested ?? config.defaultCachePolicy;
   }
 
@@ -950,6 +1087,20 @@ class ApiServicesImplementation implements ApiServices {
     if (isSuccess == null || isSuccess(response)) return right(response);
 
     // A 2xx the consumer's predicate rejected — e.g. {"success": false}.
+    // Give them first refusal on the resulting Failure, so an API that
+    // reports its own error codes in the body can surface one instead of
+    // collapsing to a generic bad request. Wrapped, because a builder that
+    // throws must not turn a response into an exception.
+    final onRejected = ApiServices._config.onRejected;
+    if (onRejected != null) {
+      try {
+        final custom = onRejected(response);
+        if (custom != null) {
+          return left(custom.withRequest(response.requestOptions));
+        }
+      } catch (_) {}
+    }
+
     // Read the message from the body the same way a real error response would.
     final body = response.data;
     final message = extractErrorMessage(body);
@@ -1001,8 +1152,14 @@ class ApiServicesImplementation implements ApiServices {
     final status = response.statusCode ?? 0;
     if (status < 200 || status >= 300) return;
 
+    final config = ApiServices._config;
     try {
-      await _cache.setCacheData(key, jsonEncode(response.data));
+      await _cache.setCacheData(
+        key,
+        jsonEncode(response.data),
+        maxEntries: config.cacheMaxEntries,
+        maxBytes: config.cacheMaxBytes,
+      );
     } catch (_) {}
   }
 
@@ -1089,6 +1246,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
@@ -1105,6 +1264,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
       showLoader: showLoader,
       cachePolicy: cachePolicy,
       cacheMaxAge: cacheMaxAge,
@@ -1124,6 +1285,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
     CachePolicy? cachePolicy,
     Duration? cacheMaxAge,
@@ -1140,6 +1303,8 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         showLoader: showLoader,
         cachePolicy: cachePolicy,
         cacheMaxAge: cacheMaxAge,
@@ -1160,6 +1325,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _sendRequest(
@@ -1173,6 +1340,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
       showLoader: showLoader,
     );
   }
@@ -1189,6 +1358,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) async {
     return _parse(
@@ -1202,6 +1373,8 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         showLoader: showLoader,
       ),
       parser,
@@ -1219,6 +1392,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _sendRequest(
@@ -1232,6 +1407,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
       showLoader: showLoader,
     );
   }
@@ -1248,6 +1425,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) async {
     return _parse(
@@ -1261,6 +1440,8 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         showLoader: showLoader,
       ),
       parser,
@@ -1278,6 +1459,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _sendRequest(
@@ -1291,6 +1474,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
       showLoader: showLoader,
     );
   }
@@ -1307,6 +1492,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) async {
     return _parse(
@@ -1320,6 +1507,8 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         showLoader: showLoader,
       ),
       parser,
@@ -1337,6 +1526,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) {
     return _sendRequest(
@@ -1350,6 +1541,8 @@ class ApiServicesImplementation implements ApiServices {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
       cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
       showLoader: showLoader,
     );
   }
@@ -1366,6 +1559,8 @@ class ApiServicesImplementation implements ApiServices {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) async {
     return _parse(
@@ -1379,9 +1574,65 @@ class ApiServicesImplementation implements ApiServices {
         onSendProgress: onSendProgress,
         onReceiveProgress: onReceiveProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         showLoader: showLoader,
       ),
       parser,
+    );
+  }
+
+  @override
+  Future<Either<Failure, Response>> head({
+    required String endpoint,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    CancelToken? cancelToken,
+    String? tag,
+    bool showLoader = true,
+    bool dedupe = true,
+  }) {
+    return _sendRequest(
+      HttpMethod.head,
+      endpoint: endpoint,
+      params: params,
+      receiveTimeout: receiveTimeout,
+      sendTimeout: sendTimeout,
+      headers: headers,
+      cancelToken: cancelToken,
+      tag: tag,
+      showLoader: showLoader,
+      dedupe: dedupe,
+    );
+  }
+
+  @override
+  Future<Either<Failure, Response>> options({
+    required String endpoint,
+    Map<String, dynamic>? params,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+    Map<String, String>? headers,
+    CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
+    bool showLoader = true,
+    bool dedupe = true,
+  }) {
+    return _sendRequest(
+      HttpMethod.options,
+      endpoint: endpoint,
+      params: params,
+      receiveTimeout: receiveTimeout,
+      sendTimeout: sendTimeout,
+      headers: headers,
+      cancelToken: cancelToken,
+      responseType: responseType,
+      tag: tag,
+      showLoader: showLoader,
+      dedupe: dedupe,
     );
   }
 
@@ -1397,6 +1648,8 @@ class ApiServicesImplementation implements ApiServices {
     Map<String, String>? headers,
     ProgressCallback? onSendProgress,
     CancelToken? cancelToken,
+    ResponseType? responseType,
+    String? tag,
     bool showLoader = true,
   }) async {
     if (showLoader) _showLoader();
@@ -1424,6 +1677,8 @@ class ApiServicesImplementation implements ApiServices {
         headers: headers,
         onSendProgress: onSendProgress,
         cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
         // The loader is already held for the whole operation, file reads
         // included; nesting another show/hide would double-count it.
         showLoader: false,
@@ -1443,6 +1698,7 @@ class ApiServicesImplementation implements ApiServices {
     Map<String, String>? headers,
     ProgressCallback? onReceiveProgress,
     CancelToken? cancelToken,
+    String? tag,
     bool deleteOnError = true,
     bool showLoader = true,
   }) async {
@@ -1455,7 +1711,8 @@ class ApiServicesImplementation implements ApiServices {
       if (offline != null) return _notify(left(offline));
 
       final token = cancelToken ?? CancelToken();
-      _activeTokens.add(token);
+      _activeTokens[token] = tag;
+      await _gate.acquire();
       try {
         final response = await _dio.download(
           endpoint,
@@ -1474,6 +1731,7 @@ class ApiServicesImplementation implements ApiServices {
       } catch (e) {
         return _notify(left(_toFailure(e)));
       } finally {
+        _gate.release();
         _activeTokens.remove(token);
       }
     } finally {
@@ -1482,9 +1740,60 @@ class ApiServicesImplementation implements ApiServices {
   }
 
   @override
-  void cancelRequest({String cancellationReason = ''}) {
-    for (final token in _activeTokens.toList()) {
+  void cancelRequest({String? tag, String cancellationReason = ''}) {
+    final targets = _activeTokens.entries
+        .where((entry) => tag == null || entry.value == tag)
+        .map((entry) => entry.key)
+        .toList();
+
+    for (final token in targets) {
       token.cancel(cancellationReason);
     }
+  }
+}
+
+/// Caps how many requests may be in flight at once, per client.
+///
+/// Sits at the innermost layer, below the cache and below de-duplication, so
+/// the cap governs actual network calls: a cache hit never consumes a slot,
+/// and two callers collapsed onto one request consume one between them.
+///
+/// A `null` limit is unlimited — nothing is tracked and [acquire] never
+/// suspends.
+class _RequestGate {
+  final int? limit;
+
+  int _active = 0;
+  final Queue<Completer<void>> _waiting = Queue<Completer<void>>();
+
+  _RequestGate(this.limit);
+
+  Future<void> acquire() {
+    final cap = limit;
+    if (cap == null) return Future<void>.value();
+
+    if (_active < cap) {
+      _active++;
+      return Future<void>.value();
+    }
+
+    final waiter = Completer<void>();
+    _waiting.add(waiter);
+    return waiter.future;
+  }
+
+  void release() {
+    if (limit == null) return;
+
+    // The slot is handed straight to the next waiter rather than decrementing
+    // and letting waiters race for it. That keeps _active honest and keeps
+    // the queue first-in-first-out, so a request made early cannot be starved
+    // by a burst of later ones.
+    if (_waiting.isNotEmpty) {
+      _waiting.removeFirst().complete();
+      return;
+    }
+
+    _active--;
   }
 }

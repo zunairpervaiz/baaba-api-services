@@ -1,3 +1,27 @@
+## Unreleased
+
+### Fixed
+
+* **The auth token was sent to every host the client talked to.** `TokenRefreshInterceptor` attached it with no host check, while `ApiConfig.baseUrl` documents absolute endpoints as a supported way to reach a CDN or third party from the same client — so a session token travelled to whoever the caller named. It also broke the most common reason to use an absolute endpoint: S3 rejects a presigned URL request that also carries an `Authorization` header. The token now goes only to the `baseUrl` host by default, overridable with `AuthConfig.sendTokenTo`. A `401` from an unscoped host no longer triggers a refresh either, so a third party's `401` cannot cascade into `onRefreshFailed` and sign the user out.
+* **A `401` arriving during a token replay triggered a second, redundant refresh.** `TokenRefreshInterceptor` returned the replayed request without awaiting it, so the `finally` that clears `_isRefreshing` ran while the replay was still in flight. Any request that `401`'d in that window saw no refresh in progress and started its own — the stampede the interceptor exists to prevent, and a real hazard against a backend that rotates refresh tokens. The replay is now awaited.
+* **A project-wide `defaultCachePolicy` cached writes.** `CachePolicy` is documented as a `get`/`getAs`-only contract, and only those methods expose the argument — but `ApiConfig.defaultCachePolicy` applies to every request that does not name one, which is every `post`, `put`, `patch` and `delete` there is. Setting it project-wide meant a repeated `POST /orders` was answered from the cache and never reached the server. Cache keys carry no method or body either, so a `POST`, `PUT`, `PATCH` and `DELETE` on one path all shared a single entry, and a `POST` response could be served to a later `GET`. Caching is now restricted to `GET` where the policy is resolved, rather than relying on the method signatures to enforce it.
+* **`ApiConfig.defaultHeaders` was documented backwards.** The dartdoc claimed a request's own `headers` *replace* the defaults; they are merged over them, which is what the README always said and what the code always did.
+
+### Added
+
+* **`ApiConfig.interceptors`.** Your own Dio interceptors, for anything that needs to modify a request rather than just watch it — correlation ids, tenant headers, request signing, a fixture router for local development. Inserted after auth (so a signer sees the `Authorization` header) and before retry and the logger (so replays re-run them and the log shows their work). `Interceptor`, `InterceptorsWrapper`, `QueuedInterceptor`, the three handler types, `DioException`, `DioExceptionType`, `Options`, `Headers` and `HttpClientAdapter` are now exported, so writing one needs no direct `dio` dependency — `HttpClientAdapter` in particular was already referenced by public config but was not on the surface.
+* **`ApiConfig.maxConcurrentRequests`.** Caps requests in flight, queueing the rest in the order they were made. Firing twenty requests at once saturates a mobile connection pool and reliably trips server-side rate limiting that `retry` then has to clean up. The cap governs real network calls — cache hits and de-duplicated callers do not consume a slot — and a queued request stays cancellable. Unset by default, which is unlimited.
+* **`responseType` on every request method.** Fetch bytes or plain text instead of decoded JSON — an image into memory, or a CSV export — without dropping to raw Dio. `ResponseType` is re-exported.
+* **`head()` and `options()`.** `RetryPolicy.idempotentMethods` already listed `HEAD` and `OPTIONS`, but neither was reachable through the public API. `HttpMethod` gained matching variants, and `HttpMethodExtension` (so `HttpMethod.get.value` works) is now exported.
+* **Cancellation by tag.** Requests accept a `tag`, and `cancelRequest(tag: 'feed')` cancels only those — previously it was all-or-nothing, so one screen tearing down aborted requests belonging to screens still on the stack. Omitting the tag still cancels everything. A tagged request opts out of de-duplication, for the same reason a caller-supplied `CancelToken` does.
+* **`ApiConfig.onRejected`.** Builds the `Failure` for a `2xx` that `isSuccess` rejected, so an API reporting its own error codes in the body no longer collapses to a generic `badRequest`. Returning `null` falls back to the previous behaviour.
+* **`ApiConfig.connectivityProbe`.** Replaces the default third-party ping with your own check — a health endpoint, typically. The default is blocked on some corporate networks and says nothing about whether your API is reachable, and until now the only alternative was disabling the check wholesale.
+* **`ApiConfig.cacheMaxEntries` and `cacheMaxBytes`.** The cache was unbounded: every distinct url and query combination added an entry nothing removed, and `cacheMaxAge` only discards a stale entry when something reads it. Past either cap the oldest entries are now evicted. Both default to `null`, leaving the cache unbounded exactly as before.
+
+### Note on compatibility
+
+Adding `head`/`options` to the `ApiServices` interface and to the `HttpMethod` enum is source-breaking in two narrow cases: code that implements `ApiServices` directly rather than using `FakeApiServices`, and code that `switch`es exhaustively over `HttpMethod`. Everything else is additive.
+
 ## 2.0.0
 
 Everything from 1.x keeps working — the old entrypoints are deprecated, not removed. See `MIGRATION.md` for the three things that can actually break you.

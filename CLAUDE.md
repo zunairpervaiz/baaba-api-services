@@ -29,7 +29,7 @@ flutter pub get
 
 Two identical entrypoints: `lib/baaba_api_handler.dart` (conventional) and `lib/ts_api_handler.dart` (predates the rename, still the canonical file). A third, `lib/testing.dart`, ships `FakeApiServices` for consumers' tests and is never imported by production code.
 
-Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `CachePolicy`, `RetryPolicy`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `ApiCacheHelper`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`, `listParser`, the `CachedResponse` extension, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions` (Dio), and `APICacheDBModel`.
+Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `CachePolicy`, `RetryPolicy`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `ApiCacheHelper`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`/`HttpMethodExtension`, `listParser`, the `CachedResponse` extension, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions`/`ResponseType` (Dio), and `APICacheDBModel`.
 
 Current version: **2.0.0**
 
@@ -39,7 +39,9 @@ Everything lives on one `ApiConfig` object passed to `ApiServices.init(...)`. Th
 
 `ApiServices` holds `_config` (the whole `ApiConfig`), `_instance`, and the two loader callbacks as statics. `configure()`, `setConnectivityCheck()`, and `setLogging()` remain as `@Deprecated` forwarders that build an `ApiConfig` and call `init()`; they are removed in 3.0.0.
 
-**Which settings apply when.** Anything read at request time — `bypassConnectivityCheck`, `isSuccess`, `observer` — takes effect immediately because the implementation reads `ApiServices._config` per call. Anything baked into the Dio client — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `httpClientAdapter` — applies only to the client built by that `init()` call.
+**Which settings apply when.** Anything read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheMaxEntries`, `cacheMaxBytes`, `observer` — takes effect immediately because the implementation reads `ApiServices._config` per call. Anything baked into the Dio client or the `NetworkInfo` — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl` — applies only to the client built by that `init()` call.
+
+`isSuccess` rejections route through `onRejected` first, which may return a `Failure` of its own; `null` or a throwing builder falls back to the generic `badRequest`.
 
 `ApiServices.reset()` clears the singleton, config, and loader callbacks. Tests should call it in `tearDown`.
 
@@ -52,9 +54,10 @@ ApiServices.instance().get/post/put/patch/delete/upload/download(...)
   → _performRequest — connectivity check, Dio call, outcome reporting
       Dio interceptor chain, order fixed in DioFactory.getDio():
         1. TokenRefreshInterceptor  — attaches token; refreshes and replays on 401
-        2. NetworkRetryInterceptor  — retries transient failures and retryable statuses
-        3. PrettyDioLogger          — non-release builds only
-        4. ObserverInterceptor      — onRequest only (see below)
+        2. ApiConfig.interceptors   — the caller's own, if any
+        3. NetworkRetryInterceptor  — retries transient failures and retryable statuses
+        4. PrettyDioLogger          — non-release builds only
+        5. ObserverInterceptor      — onRequest only (see below)
   → ErrorHandler.handle()  — DioException → Failure
   → Right(Response) or Left(Failure)
   → _parse<T>()     — only for the *As<T> variants
@@ -84,17 +87,33 @@ Message extraction lives in `src/utils/error_body.dart` (`extractErrorMessage`),
 
 ### Connectivity check
 
-`NetworkInfo` runs a pre-flight probe before every request unless `bypassConnectivityCheck` is set. The probe is a real network round-trip, so a **positive** result is cached for `connectivityCacheTtl` (default 5s) and concurrent callers share one in-flight probe.
+`NetworkInfo` runs a pre-flight probe before every request unless `bypassConnectivityCheck` is set. The probe itself is `ApiConfig.connectivityProbe` when supplied, otherwise `internet_connection_checker_plus` — which reaches third-party hosts, so consumers behind a proxy or under a privacy review point it at their own health endpoint instead of disabling the check wholesale. The probe is a real network round-trip, so a **positive** result is cached for `connectivityCacheTtl` (default 5s) and concurrent callers share one in-flight probe.
 
 **Negative results are deliberately never cached.** A cached `false` would keep reporting offline for seconds after the connection came back — exactly when the user is hammering retry. `probe` and `clock` are injectable so tests need neither network nor sleeps.
+
+### Caller interceptors
+
+`ApiConfig.interceptors` go **after auth, before retry**. After auth so a signing interceptor sees the `Authorization` header it has to cover and cannot be clobbered by the token; before retry and the logger so a replay re-runs them (a timestamped signature is regenerated per attempt rather than replayed stale) and so what the caller adds is what gets printed.
+
+> A retry replays the *same* `RequestOptions` instance, not a copy. Reading a header off it after the fact shows the last attempt's value — tests that assert per-attempt headers must snapshot them at send time.
+
+### Concurrency cap
+
+`ApiConfig.maxConcurrentRequests` is enforced by `_RequestGate`, a FIFO semaphore at the bottom of `api_service.dart`, acquired inside `_performRequest` and `download`. It sits **below** the cache and de-duplication deliberately: the cap is on real network calls, so a cache hit consumes nothing and two collapsed callers consume one slot between them — which is also why a cap of 1 does not deadlock a de-duplicated pair.
+
+The token is registered in `_activeTokens` *before* acquiring, so a request still queued is cancellable. `release()` hands the slot straight to the next waiter rather than decrementing, which keeps `_active` honest and the queue FIFO. A `null` limit short-circuits both methods, so an uncapped client tracks nothing. The limit is read once at construction, so it is a client-built setting, not a request-time one.
 
 ### Token refresh (`src/interceptors/token_refresh_interceptor.dart`)
 
 Unchanged in 2.0.0 apart from a `fromConfig` factory taking `AuthConfig`. The original multi-parameter constructor is kept because the test suite drives it directly.
 
+> **`_shouldAttach` gates both `onRequest` and `onError`.** `baseUrl` supports absolute endpoints — the docs sell that as the way to reach a CDN or third party — so without a host check the bearer token goes wherever the caller points the client. Two consequences, not one: the token leaks, and S3 rejects a presigned URL that also carries an `Authorization` header, so the documented pattern fails. The default is "same host as `dio.options.baseUrl`", overridable per-`Uri` with `AuthConfig.sendTokenTo`; a throwing predicate fails **closed**. `onError` is gated too, or a third party's 401 would trigger a refresh and, on failure, fire `onRefreshFailed` — signing the user out of an app whose own session was never in question. An empty `baseUrl` sends everywhere, since there is nothing to compare against and blocking would break absolute-url-only clients.
+
 On 401: checks `extra['_tokenRetried']` against loops; guards concurrent refreshes with `_isRefreshing` + `Completer<bool>` so a burst of 401s all succeed off one refresh; calls `onTokenRefresh()`, then `getToken()`, rebuilds headers, replays. `onRefreshFailed()` fires if refresh fails.
 
 `refreshTimeout` bounds the wait for the pathological case where the refresh endpoint itself 401s — that inner call is queued behind the very refresh it's part of.
+
+> **`_retryRequest` must be `await`ed, not merely returned.** The `finally` that clears `_isRefreshing`/`_refreshCompleter` runs as soon as the returned future is *produced*, not when it completes, so an un-awaited return releases the guard while the replay is still in flight. A 401 arriving in that window then sees no refresh in progress and starts a second one — exactly the stampede the guard exists to prevent, and worse against a backend that rotates refresh tokens. `unawaited_return_in_try_block` catches a regression here; `test/token_refresh_interceptor_test.dart` pins the behaviour.
 
 ### Retries (`src/config/retry_policy.dart`)
 
@@ -119,6 +138,8 @@ Two hazards in `APICacheManager`, both worked around in `ApiCacheHelperImplement
 
 `CachePolicy` is opt-in per request on `get`/`getAs` only — a cache policy on a `POST` is meaningless and deliberately not expressible. `networkOnly` (default) is the 1.x behaviour.
 
+> **The GET-only rule is enforced in `_effectiveCachePolicy`, not by the method signatures.** Only `get`/`getAs` take a `cachePolicy` argument, which makes the contract look self-enforcing, but `ApiConfig.defaultCachePolicy` applies to every request that does not name one — every `post`, `put`, `patch`, `delete`, `head` and `options`. Before this was enforced, a project-wide policy meant a repeated `POST /orders` was answered from the cache and never sent. Cache keys carry no method or body (see `cache_key.dart`), so all six methods on one path shared one entry and a `POST` response could be served to a later `GET`. `_effectiveCachePolicy` therefore takes the `HttpMethod` and returns `networkOnly` for anything but `GET`.
+
 `cachePolicy` is **nullable** on the public methods so "not specified" is distinguishable from "explicitly networkOnly". `_effectiveCachePolicy` resolves it: `ApiConfig.cacheEnabled: false` wins over everything, then the call site's value, then `ApiConfig.defaultCachePolicy`. The `_cache` getter is only touched when the resolved policy is not `networkOnly`, so `cacheEnabled: false` genuinely never opens SQLite.
 
 Keys come from `src/utils/cache_key.dart` and include sorted query parameters — 1.x used the raw url, so `?page=1` and `?page=2` collided. Keys are **not** hashed: a digest would have to be stable across app restarts, and `String.hashCode` isn't.
@@ -126,6 +147,10 @@ Keys come from `src/utils/cache_key.dart` and include sorted query parameters �
 Cached responses are stored as `jsonEncode(response.data)` and rebuilt into a `Response` with `extra[fromCacheKey] = true`, readable via `response.isFromCache`. Only 2xx is stored, and writes are best-effort — a body that won't encode is skipped rather than failing the request.
 
 Entries are **not** scoped per user; `clearAllCache()` on logout is the documented contract.
+
+**Eviction.** `ApiConfig.cacheMaxEntries`/`cacheMaxBytes` bound the cache; both `null` (the default) leaves it unbounded and costs nothing. `cacheMaxAge` is not a bound — it discards a stale entry only when something *reads* it, so a key never requested again is never reclaimed.
+
+> `APICacheManager` exposes no way to list keys — only get, add, delete and empty — so there is nothing to sort by age. `ApiCacheHelperImplementation` therefore keeps its own index under the raw key `__baaba_cache_index__` (deliberately without the `api_cache_` prefix, so no real key can collide with it), mapping key to `[writtenAtMillis, byteLength]`. Index mutations are serialised through `_indexLock`: the per-key `_pendingWrites` chaining does not cover it, because writes for *different* keys run concurrently and all touch that one row. Eviction is oldest-by-write, never oldest-by-read — tracking reads would mean a disk write on every cache hit. The entry the current write just stored is never evicted, so a cap of 0 or 1 still stores it. `clearCache` must drop the key from the index or its bytes keep counting against the cap; `clearAllCache` resets the in-memory copy, since `emptyCache()` takes the index row with everything else.
 
 ### De-duplication
 
@@ -147,7 +172,9 @@ Every observer callback is wrapped in try/catch — a broken observer must never
 
 ### Request cancellation
 
-`_activeTokens: Set<CancelToken>` tracks every active token; `cancelRequest()` cancels all of them. Tokens are removed in the `finally` of `_performRequest`/`download`.
+`_activeTokens: Map<CancelToken, String?>` tracks every active token against the `tag` its request was made under. `cancelRequest()` cancels all of them; `cancelRequest(tag: ...)` cancels only that tag's. Tokens are removed in the `finally` of `_performRequest`/`download`.
+
+A `tag` opts the request out of de-duplication for the same reason a caller-supplied `CancelToken` does: `cancelRequest(tag:)` would otherwise abort a collapsed request that a caller under a different tag — or none — is still awaiting. `canDedupe = dedupe && cancelToken == null && tag == null`.
 
 ### Loading indicator
 
@@ -175,7 +202,8 @@ Every observer callback is wrapped in try/catch — a broken observer must never
 - `mocktail` for all mocks. Mocks created in `setUpAll` are shared across a group; `reset(mock)` in `setUp` if you need `verifyNever`.
 - Two established patterns: **`MockDio` + `MockNetworkInfo`** for service-level tests, and a **fake `HttpClientAdapter`** for interceptor-level tests that drive real Dio end-to-end. Don't invent a third.
 - `ApiServices.reset()` in `tearDown` for anything touching static config.
-- Network-level tests mock `Dio` directly; don't mock `ApiServices` itself — use `FakeApiServices` from `lib/testing.dart`.
+- Network-level tests mock `Dio` directly; don't mock `ApiServices` itself — use `FakeApiServices` from `lib/testing.dart`. Anything added to the `ApiServices` interface has to land in `FakeApiServices` too, or consumers' test suites stop compiling.
+- Cache eviction tests use a stateful fake `APICacheManager` rather than sqflite, and must space writes apart (`syncTime` has millisecond resolution, so same-tick entries cannot be ordered).
 
 #### Local environment note
 

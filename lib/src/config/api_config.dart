@@ -3,6 +3,7 @@ import 'package:baaba_api_handler/src/config/cache_policy.dart';
 import 'package:baaba_api_handler/src/config/retry_policy.dart';
 import 'package:baaba_api_handler/src/observer/api_observer.dart';
 import 'package:baaba_api_handler/src/utils/api_log_options.dart';
+import 'package:baaba_api_handler/src/utils/failure.dart';
 import 'package:dio/dio.dart';
 
 /// Everything `ApiServices` needs, in one object.
@@ -67,8 +68,9 @@ class ApiConfig {
 
   /// Headers merged into every request.
   ///
-  /// Requests that pass their own `headers` replace these rather than merging
-  /// with them, matching the pre-2.0.0 behaviour.
+  /// A request that passes its own `headers` is merged *over* these rather
+  /// than replacing them: keys it does not mention still travel, and keys it
+  /// does mention win.
   final Map<String, String> defaultHeaders;
 
   /// Skip the pre-flight internet connectivity check.
@@ -85,6 +87,32 @@ class ApiConfig {
   /// request roughly doubles the latency of a fast API call, so the result is
   /// reused for this long. Set to [Duration.zero] to probe every time.
   final Duration connectivityCacheTtl;
+
+  /// Replaces the pre-flight connectivity probe.
+  ///
+  /// The default probe reaches out to third-party hosts, which is wrong often
+  /// enough to matter: corporate networks block it, privacy reviews object to
+  /// it, and it says nothing about whether *your* API is reachable. Point it
+  /// at your own health endpoint instead:
+  ///
+  /// ```dart
+  /// connectivityProbe: () async {
+  ///   try {
+  ///     final res = await Dio().head('https://api.example.com/health');
+  ///     return res.statusCode == 200;
+  ///   } catch (_) {
+  ///     return false;
+  ///   }
+  /// },
+  /// ```
+  ///
+  /// Must not throw — one that does is treated as "offline". Keep it cheap:
+  /// it runs before requests, though a positive result is reused for
+  /// [connectivityCacheTtl].
+  ///
+  /// Ignored when [bypassConnectivityCheck] is `true`, which skips the probe
+  /// entirely.
+  final Future<bool> Function()? connectivityProbe;
 
   /// What the console logger prints. Only applies outside release builds —
   /// no logger is ever attached in release.
@@ -127,6 +155,36 @@ class ApiConfig {
   /// Ignored entirely when [cacheEnabled] is `false`.
   final CachePolicy defaultCachePolicy;
 
+  /// Caps how many entries the response cache keeps. `null` is unbounded.
+  ///
+  /// Without a bound the cache only ever grows: every distinct url and query
+  /// combination adds a row that nothing removes, and `cacheMaxAge` does not
+  /// help — it discards a stale entry when something reads it, so a key that
+  /// is never requested again is never reclaimed.
+  ///
+  /// When a write pushes the cache past the cap, the oldest entries are
+  /// deleted until it fits. "Oldest" is by write time, not by last read:
+  /// tracking reads would mean a disk write on every cache *hit*, which would
+  /// cost more than the eviction saves.
+  final int? cacheMaxEntries;
+
+  /// Caps the total size of cached response bodies, in bytes. `null` is
+  /// unbounded.
+  ///
+  /// Applied alongside [cacheMaxEntries] — whichever binds first — and evicts
+  /// oldest-first the same way. A single response larger than this is still
+  /// stored; the cap governs the total, and refusing to cache a large body
+  /// would fail silently in a way that is very hard to notice.
+  ///
+  /// ```dart
+  /// // Keep the cache to roughly 500 entries or 5 MB, whichever comes first.
+  /// ApiServices.init(const ApiConfig(
+  ///   cacheMaxEntries: 500,
+  ///   cacheMaxBytes: 5 * 1024 * 1024,
+  /// ));
+  /// ```
+  final int? cacheMaxBytes;
+
   /// Decides whether a `2xx` response actually represents success.
   ///
   /// Some APIs answer `200 OK` with `{"success": false, "message": "..."}`.
@@ -145,6 +203,32 @@ class ApiConfig {
   /// Defaults to `null` — every `2xx` is a success.
   final bool Function(Response response)? isSuccess;
 
+  /// Builds the [Failure] for a response [isSuccess] rejected.
+  ///
+  /// Without it, every rejected body collapses to the same generic
+  /// `badRequest`/`400` failure, so an API that answers `200 OK` with
+  /// `{"success": false, "code": "INSUFFICIENT_FUNDS"}` loses the one piece of
+  /// information the caller actually needed. Return a failure that carries it:
+  ///
+  /// ```dart
+  /// isSuccess: (r) => r.data is! Map || r.data['success'] != false,
+  /// onRejected: (r) => Failure(
+  ///   ErrorSource.badRequest,
+  ///   ResponseCode.badRequest,
+  ///   r.data['message'] as String? ?? 'Request failed',
+  ///   data: r.data,
+  ///   statusCode: r.statusCode,
+  /// ),
+  /// ```
+  ///
+  /// Only consulted when [isSuccess] returns `false`; returning `null` falls
+  /// back to the generic failure. Ignored when [isSuccess] is not set, since
+  /// nothing is ever rejected then.
+  ///
+  /// Must not throw — one that does falls back to the generic failure rather
+  /// than turning a response into an exception.
+  final Failure? Function(Response response)? onRejected;
+
   /// Replaces Dio's default HTTP adapter.
   ///
   /// Supply your own to pin certificates, or to route through a debugging
@@ -158,6 +242,57 @@ class ApiConfig {
   /// Crashlytics, or analytics. See [ApiObserver].
   final ApiObserver? observer;
 
+  /// Your own Dio interceptors, added to the chain built by this package.
+  ///
+  /// [observer] can watch but not change a request; this is the seam for
+  /// anything that needs to *modify* one — a correlation id per call, a
+  /// tenant header computed at call time, request signing, or a router that
+  /// short-circuits to fixtures during local development.
+  ///
+  /// ```dart
+  /// ApiServices.init(ApiConfig(
+  ///   interceptors: [
+  ///     InterceptorsWrapper(onRequest: (options, handler) {
+  ///       options.headers['X-Correlation-Id'] = const Uuid().v4();
+  ///       handler.next(options);
+  ///     }),
+  ///   ],
+  /// ));
+  /// ```
+  ///
+  /// **Where these sit in the chain: after auth, before retry.** After auth,
+  /// so a signing interceptor sees the `Authorization` header it has to cover
+  /// and a header you set cannot be clobbered by the token. Before retry, so
+  /// a replayed request still passes through them — a signature carrying a
+  /// timestamp is regenerated for each attempt rather than being replayed
+  /// stale — and before the logger, so what you add is what gets printed.
+  ///
+  /// They run in the order given. Applied when the client is built, so
+  /// changing them means calling `ApiServices.init` again.
+  final List<Interceptor> interceptors;
+
+  /// Caps how many requests may be in flight at once. `null` is unlimited.
+  ///
+  /// A screen that fires twenty requests on mount sends all twenty at once.
+  /// On a mobile connection that saturates the connection pool, so every one
+  /// of them reports a worse latency than it would have alone, and it is a
+  /// reliable way to trip the server-side rate limiting that [retry] then has
+  /// to clean up.
+  ///
+  /// ```dart
+  /// ApiServices.init(const ApiConfig(maxConcurrentRequests: 6));
+  /// ```
+  ///
+  /// Requests past the cap queue in the order they were made and start as
+  /// slots free up. The cap governs actual network calls: a cache hit and a
+  /// request collapsed by de-duplication do not consume a slot. A queued
+  /// request is still cancellable, and still holds the loading indicator —
+  /// it is pending, not finished.
+  ///
+  /// Applied when the client is built, so changing it means calling
+  /// `ApiServices.init` again.
+  final int? maxConcurrentRequests;
+
   /// Token auth and automatic refresh on `401`. Omit for an unauthenticated
   /// client. See [AuthConfig].
   final AuthConfig? auth;
@@ -170,13 +305,19 @@ class ApiConfig {
     this.defaultHeaders = const {},
     this.bypassConnectivityCheck = false,
     this.connectivityCacheTtl = const Duration(seconds: 5),
+    this.connectivityProbe,
     this.logging = const ApiLogOptions(),
     this.retry = const RetryPolicy(),
     this.cacheEnabled = true,
     this.defaultCachePolicy = CachePolicy.networkOnly,
+    this.cacheMaxEntries,
+    this.cacheMaxBytes,
     this.isSuccess,
+    this.onRejected,
     this.httpClientAdapter,
     this.observer,
+    this.interceptors = const [],
+    this.maxConcurrentRequests,
     this.auth,
   });
 
@@ -198,13 +339,19 @@ class ApiConfig {
     Map<String, String>? defaultHeaders,
     bool? bypassConnectivityCheck,
     Duration? connectivityCacheTtl,
+    Future<bool> Function()? connectivityProbe,
     ApiLogOptions? logging,
     RetryPolicy? retry,
     bool? cacheEnabled,
     CachePolicy? defaultCachePolicy,
+    int? cacheMaxEntries,
+    int? cacheMaxBytes,
     bool Function(Response response)? isSuccess,
+    Failure? Function(Response response)? onRejected,
     HttpClientAdapter? httpClientAdapter,
     ApiObserver? observer,
+    List<Interceptor>? interceptors,
+    int? maxConcurrentRequests,
     AuthConfig? auth,
   }) {
     return ApiConfig(
@@ -216,13 +363,20 @@ class ApiConfig {
       bypassConnectivityCheck:
           bypassConnectivityCheck ?? this.bypassConnectivityCheck,
       connectivityCacheTtl: connectivityCacheTtl ?? this.connectivityCacheTtl,
+      connectivityProbe: connectivityProbe ?? this.connectivityProbe,
       logging: logging ?? this.logging,
       retry: retry ?? this.retry,
       cacheEnabled: cacheEnabled ?? this.cacheEnabled,
       defaultCachePolicy: defaultCachePolicy ?? this.defaultCachePolicy,
+      cacheMaxEntries: cacheMaxEntries ?? this.cacheMaxEntries,
+      cacheMaxBytes: cacheMaxBytes ?? this.cacheMaxBytes,
       isSuccess: isSuccess ?? this.isSuccess,
+      onRejected: onRejected ?? this.onRejected,
       httpClientAdapter: httpClientAdapter ?? this.httpClientAdapter,
       observer: observer ?? this.observer,
+      interceptors: interceptors ?? this.interceptors,
+      maxConcurrentRequests:
+          maxConcurrentRequests ?? this.maxConcurrentRequests,
       auth: auth ?? this.auth,
     );
   }
