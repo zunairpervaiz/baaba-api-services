@@ -1,4 +1,18 @@
-## Unreleased
+## 3.0.0
+
+See `MIGRATION.md` for upgrade steps. Most apps need only the first item.
+
+### ⚠️ Breaking changes
+
+* **Requires `equatable` 3.** `Failure` extends `Equatable`, so this package and your app must agree on its major version. If your app pins `equatable: ^2.x`, raise it to `^3.0.0`.
+* **The deprecated 1.x configuration methods are removed.** `ApiServices.configure()`, `setConnectivityCheck()` and `setLogging()` were deprecated in 2.0.0 and scheduled for removal in this release. Use `ApiServices.init(ApiConfig(...))`; the mapping is in `MIGRATION.md`.
+* **`HttpMethod` gained `head` and `options`.** A `switch` that covers every `HttpMethod` value no longer compiles until you add the two cases or a wildcard.
+* **`ApiServices` gained `head()` and `options()`.** Code that implements `ApiServices` directly, instead of using `FakeApiServices`, must add them.
+
+### Changed
+
+* Minimum `dio` is now `5.11.0`, and minimum `internet_connection_checker_plus` is now `3.1.2`.
+* Added `repository` and `issue_tracker` to the pubspec.
 
 ### Fixed
 
@@ -9,7 +23,7 @@
 
 ### Added
 
-* **`ApiConfig.interceptors`.** Your own Dio interceptors, for anything that needs to modify a request rather than just watch it — correlation ids, tenant headers, request signing, a fixture router for local development. Inserted after auth (so a signer sees the `Authorization` header) and before retry and the logger (so replays re-run them and the log shows their work). `Interceptor`, `InterceptorsWrapper`, `QueuedInterceptor`, the three handler types, `DioException`, `DioExceptionType`, `Options`, `Headers` and `HttpClientAdapter` are now exported, so writing one needs no direct `dio` dependency — `HttpClientAdapter` in particular was already referenced by public config but was not on the surface.
+* **`ApiConfig.interceptors`.** Your own Dio interceptors, for anything that needs to modify a request rather than just watch it — correlation ids, tenant headers, request signing, a fixture router for local development. Inserted after auth (so a signer sees the `Authorization` header) and before retry and the logger (so replays re-run them and the log shows their work). `Interceptor`, `InterceptorsWrapper`, `QueuedInterceptor`, the three handler types, `DioException`, `DioExceptionType` and `HttpClientAdapter` are now exported, so writing one needs no direct `dio` dependency — `HttpClientAdapter` in particular was already referenced by public config but was not on the surface.
 * **`ApiConfig.maxConcurrentRequests`.** Caps requests in flight, queueing the rest in the order they were made. Firing twenty requests at once saturates a mobile connection pool and reliably trips server-side rate limiting that `retry` then has to clean up. The cap governs real network calls — cache hits and de-duplicated callers do not consume a slot — and a queued request stays cancellable. Unset by default, which is unlimited.
 * **`responseType` on every request method.** Fetch bytes or plain text instead of decoded JSON — an image into memory, or a CSV export — without dropping to raw Dio. `ResponseType` is re-exported.
 * **`head()` and `options()`.** `RetryPolicy.idempotentMethods` already listed `HEAD` and `OPTIONS`, but neither was reachable through the public API. `HttpMethod` gained matching variants, and `HttpMethodExtension` (so `HttpMethod.get.value` works) is now exported.
@@ -17,10 +31,6 @@
 * **`ApiConfig.onRejected`.** Builds the `Failure` for a `2xx` that `isSuccess` rejected, so an API reporting its own error codes in the body no longer collapses to a generic `badRequest`. Returning `null` falls back to the previous behaviour.
 * **`ApiConfig.connectivityProbe`.** Replaces the default third-party ping with your own check — a health endpoint, typically. The default is blocked on some corporate networks and says nothing about whether your API is reachable, and until now the only alternative was disabling the check wholesale.
 * **`ApiConfig.cacheMaxEntries` and `cacheMaxBytes`.** The cache was unbounded: every distinct url and query combination added an entry nothing removed, and `cacheMaxAge` only discards a stale entry when something reads it. Past either cap the oldest entries are now evicted. Both default to `null`, leaving the cache unbounded exactly as before.
-
-### Note on compatibility
-
-Adding `head`/`options` to the `ApiServices` interface and to the `HttpMethod` enum is source-breaking in two narrow cases: code that implements `ApiServices` directly rather than using `FakeApiServices`, and code that `switch`es exhaustively over `HttpMethod`. Everything else is additive.
 
 ## 2.0.0
 

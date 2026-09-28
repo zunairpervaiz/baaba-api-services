@@ -13,7 +13,7 @@ result.fold(
 );
 ```
 
-> **Upgrading from 1.x?** See [MIGRATION.md](MIGRATION.md). Your existing code keeps working; three things can break you, all listed there.
+> **Upgrading from 2.x?** 3.0.0 requires `equatable` 3 and removes the deprecated `configure()`, `setConnectivityCheck()` and `setLogging()`. [MIGRATION.md](MIGRATION.md) lists every change with its fix. Coming from 1.x, follow the 2.0.0 section of the same guide first.
 
 ## Table of Contents
 
@@ -50,7 +50,7 @@ result.fold(
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^2.0.0
+  baaba_api_handler: ^3.0.0
 ```
 
 ```dart
@@ -798,7 +798,7 @@ Every field on `ApiConfig`:
 | `maxConcurrentRequests` | `null` | Cap on requests in flight at once. Unlimited when unset. |
 | `auth` | `null` | Token auth and refresh. |
 
-Settings read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheMaxEntries`, `cacheMaxBytes` — take effect immediately. Settings baked into the Dio client — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `observer`, `httpClientAdapter` — apply to the client built by `init`, so changing them means calling `init` again.
+Settings read at request time take effect immediately: `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheEnabled`, `defaultCachePolicy`, `cacheMaxEntries`, `cacheMaxBytes`, and the observer's `onResponse`/`onFailure`. The rest are fixed when `init` builds the client, so changing them means calling `init` again: `baseUrl`, timeouts, `defaultHeaders`, `logging`, `retry`, `auth`, `interceptors`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and the observer's `onRequest`.
 
 ---
 

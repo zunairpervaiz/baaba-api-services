@@ -1,3 +1,38 @@
+# Migrating to 3.0.0
+
+Most apps only need to raise their `equatable` constraint. The other changes affect specific code patterns, and each is a compile error with a mechanical fix.
+
+## 1. Raise `equatable` to 3
+
+`Failure` extends `Equatable`, so your app and this package must use the same major version. If your pubspec pins version 2, `flutter pub get` will fail to resolve:
+
+```yaml
+dependencies:
+  equatable: ^3.0.0
+```
+
+## 2. Replace the removed configuration methods
+
+`configure()`, `setConnectivityCheck()` and `setLogging()` are gone. Each one maps to a field on `ApiConfig`:
+
+| Removed | Replacement |
+| --- | --- |
+| `ApiServices.configure(getToken:, onTokenRefresh:, ...)` | `ApiServices.init(ApiConfig(auth: AuthConfig(...)))` |
+| `ApiServices.setConnectivityCheck(enabled: false)` | `ApiServices.init(ApiConfig(bypassConnectivityCheck: true))` |
+| `ApiServices.setLogging(options)` | `ApiServices.init(ApiConfig(logging: options))` |
+
+Merge them into one `init()` call; a before-and-after example is under "Recommended: move to `ApiConfig`" below. `configureLoader` is unchanged.
+
+## 3. Exhaustive switches over `HttpMethod`
+
+`HttpMethod` gained `head` and `options`. Add both cases or a wildcard.
+
+## 4. Classes that implement `ApiServices`
+
+The interface gained `head()` and `options()`. If you implemented it by hand for tests, add them, or use `FakeApiServices` from `package:baaba_api_handler/testing.dart`, which is kept up to date.
+
+---
+
 # Migrating to 2.0.0
 
 Short version: **your existing code keeps compiling and behaving the same**, with three exceptions listed below. Everything replaced in 2.0.0 is deprecated rather than removed, and will be dropped in 3.0.0.
@@ -52,7 +87,7 @@ ApiServices.init(const ApiConfig(receiveTimeout: Duration(minutes: 2)));
 
 ## Recommended: move to `ApiConfig`
 
-`configure()`, `setConnectivityCheck()`, and `setLogging()` still work. They are deprecated because settings were spread across four static mutables with load-order rules that were easy to get wrong — `setLogging` after the first `instance()` call, for instance, silently did nothing.
+`configure()`, `setConnectivityCheck()`, and `setLogging()` still work in 2.x (they were removed in 3.0.0). They are deprecated because settings were spread across four static mutables with load-order rules that were easy to get wrong — `setLogging` after the first `instance()` call, for instance, silently did nothing.
 
 **Before:**
 

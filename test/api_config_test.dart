@@ -68,40 +68,6 @@ void main() {
     });
   });
 
-  group('deprecated forwarders', () {
-    test('configure() produces an equivalent AuthConfig', () {
-      // ignore: deprecated_member_use_from_same_package
-      ApiServices.configure(
-        getToken: () async => 'token',
-        onTokenRefresh: () async => true,
-        bypassConnectivityCheck: true,
-        refreshTimeout: const Duration(seconds: 10),
-      );
-
-      final auth = ApiServices.config.auth;
-      expect(auth, isNotNull);
-      expect(auth!.refreshTimeout, const Duration(seconds: 10));
-      expect(ApiServices.config.bypassConnectivityCheck, isTrue);
-    });
-
-    test('setConnectivityCheck() flips the bypass flag', () {
-      // ignore: deprecated_member_use_from_same_package
-      ApiServices.setConnectivityCheck(enabled: false);
-      expect(ApiServices.config.bypassConnectivityCheck, isTrue);
-
-      // ignore: deprecated_member_use_from_same_package
-      ApiServices.setConnectivityCheck();
-      expect(ApiServices.config.bypassConnectivityCheck, isFalse);
-    });
-
-    test('setLogging() replaces the log options', () {
-      // ignore: deprecated_member_use_from_same_package
-      ApiServices.setLogging(const ApiLogOptions.disabled());
-
-      expect(ApiServices.config.logging.enabled, isFalse);
-    });
-  });
-
   group('ApiConfig.copyWith', () {
     test('replaces only what it is given', () {
       const base = ApiConfig(

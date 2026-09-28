@@ -31,13 +31,13 @@ Two identical entrypoints: `lib/baaba_api_handler.dart` (conventional) and `lib/
 
 Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `CachePolicy`, `RetryPolicy`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `ApiCacheHelper`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`/`HttpMethodExtension`, `listParser`, the `CachedResponse` extension, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions`/`ResponseType` (Dio), and `APICacheDBModel`.
 
-Current version: **2.0.0**
+Current version: **3.0.0**
 
 ### Configuration
 
 Everything lives on one `ApiConfig` object passed to `ApiServices.init(...)`. This replaced four separate static mutables in 2.0.0 — with nine features to configure, a setter per feature meant a dozen statics with load-order footguns.
 
-`ApiServices` holds `_config` (the whole `ApiConfig`), `_instance`, and the two loader callbacks as statics. `configure()`, `setConnectivityCheck()`, and `setLogging()` remain as `@Deprecated` forwarders that build an `ApiConfig` and call `init()`; they are removed in 3.0.0.
+`ApiServices` holds `_config` (the whole `ApiConfig`), `_instance`, and the two loader callbacks as statics. The 1.x setters (`configure()`, `setConnectivityCheck()`, `setLogging()`) were deprecated in 2.0.0 and removed in 3.0.0; `init()` is the only way to configure.
 
 **Which settings apply when.** Anything read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheMaxEntries`, `cacheMaxBytes`, `observer` — takes effect immediately because the implementation reads `ApiServices._config` per call. Anything baked into the Dio client or the `NetworkInfo` — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl` — applies only to the client built by that `init()` call.
 

@@ -4,10 +4,8 @@ import 'dart:convert';
 
 import 'package:baaba_api_handler/src/api_cache_helper.dart';
 import 'package:baaba_api_handler/src/config/api_config.dart';
-import 'package:baaba_api_handler/src/config/auth_config.dart';
 import 'package:baaba_api_handler/src/config/cache_policy.dart';
 import 'package:baaba_api_handler/src/dio_factory.dart';
-import 'package:baaba_api_handler/src/utils/api_log_options.dart';
 import 'package:baaba_api_handler/src/utils/cache_key.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/error_body.dart';
@@ -189,71 +187,6 @@ abstract interface class ApiServices {
     _onLoadingShow = null;
     _onLoadingHide = null;
     _activeLoadingCount = 0;
-  }
-
-  /// Configures token authentication.
-  ///
-  /// Superseded by [init], which covers this and everything else in one place:
-  ///
-  /// ```dart
-  /// ApiServices.init(ApiConfig(
-  ///   bypassConnectivityCheck: false,
-  ///   logging: const ApiLogOptions(),
-  ///   auth: AuthConfig(
-  ///     getToken: getToken,
-  ///     onTokenRefresh: onTokenRefresh,
-  ///     onRefreshFailed: onRefreshFailed,
-  ///   ),
-  /// ));
-  /// ```
-  @Deprecated(
-    'Use ApiServices.init(ApiConfig(auth: AuthConfig(...))) instead. '
-    'Will be removed in 3.0.0.',
-  )
-  static void configure({
-    required Future<String?> Function() getToken,
-    required Future<bool> Function() onTokenRefresh,
-    void Function()? onRefreshFailed,
-    Map<String, String> Function(String token)? headerBuilder,
-    bool bypassConnectivityCheck = false,
-    Duration refreshTimeout = const Duration(seconds: 30),
-    ApiLogOptions logging = const ApiLogOptions(),
-  }) {
-    init(_config.copyWith(
-      bypassConnectivityCheck: bypassConnectivityCheck,
-      logging: logging,
-      auth: AuthConfig(
-        getToken: getToken,
-        onTokenRefresh: onTokenRefresh,
-        onRefreshFailed: onRefreshFailed,
-        headerBuilder: headerBuilder,
-        refreshTimeout: refreshTimeout,
-      ),
-    ));
-  }
-
-  /// Controls the connectivity check without rebuilding the client.
-  ///
-  /// Read at request time, so unlike most settings this still takes effect
-  /// after [instance] has been called.
-  @Deprecated(
-    'Use ApiServices.init(ApiConfig(bypassConnectivityCheck: true)) instead. '
-    'Will be removed in 3.0.0.',
-  )
-  static void setConnectivityCheck({bool enabled = true}) {
-    _config = _config.copyWith(bypassConnectivityCheck: !enabled);
-  }
-
-  /// Configures the console logger.
-  ///
-  /// Must be called **before** the first [instance] call — the logger is part
-  /// of the Dio client, which is built once and cached.
-  @Deprecated(
-    'Use ApiServices.init(ApiConfig(logging: ...)) instead. '
-    'Will be removed in 3.0.0.',
-  )
-  static void setLogging(ApiLogOptions options) {
-    _config = _config.copyWith(logging: options);
   }
 
   /// Configures a global loading indicator shown automatically around every

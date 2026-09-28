@@ -13,7 +13,7 @@ import 'package:dio/dio.dart';
 /// the rest wait for that same refresh to finish, then retry with the fresh
 /// token — none of them fail outright just for losing the race.
 ///
-/// Use [ApiServices.configure] to set this up — you do not need to instantiate
+/// Use `ApiServices.init(ApiConfig(auth: AuthConfig(...)))` to set this up — you do not need to instantiate
 /// this class directly.
 class TokenRefreshInterceptor extends Interceptor {
   /// Returns the current auth token to attach to each request.
