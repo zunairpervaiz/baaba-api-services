@@ -2,6 +2,7 @@
 // The fake mimics APICacheManager's two quirks; this proves the index
 // survives the actual implementation, including its check-then-act writes.
 import 'package:api_cache_manager/api_cache_manager.dart';
+import 'package:api_cache_manager/models/cache_db_model.dart';
 import 'package:baaba_api_handler/src/api_cache_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -88,5 +89,27 @@ void main() {
       hasIndex = false;
     }
     expect(hasIndex, isFalse, reason: 'unbounded must cost nothing');
+  });
+
+  test('a write heals duplicate rows instead of hiding behind them', () async {
+    // APICacheManager.addCacheData is check-then-act, so two writers racing
+    // on one key — two isolates, or 1.x before writes were serialised — both
+    // insert. Reproduce that with the raw manager.
+    final raw = APICacheManager();
+    await Future.wait([
+      raw.addCacheData(APICacheDBModel(key: 'api_cache_/dup', syncData: '"a"')),
+      raw.addCacheData(APICacheDBModel(key: 'api_cache_/dup', syncData: '"b"')),
+    ]);
+    expect(await raw.isAPICacheKeyExist('api_cache_/dup'), isFalse,
+        reason: 'precondition: the key is duplicated (rows.length == 2)');
+
+    // From then on every write saw "absent" and inserted yet another row,
+    // while every read took `.first` — the oldest. The cache answered with
+    // its first-ever response forever.
+    await cache.setCacheData('/dup', '"fresh"');
+
+    expect((await cache.getCacheData('/dup'))?.syncData, '"fresh"');
+    expect(await raw.isAPICacheKeyExist('api_cache_/dup'), isTrue,
+        reason: 'one row again, so updates go back to updating');
   });
 }

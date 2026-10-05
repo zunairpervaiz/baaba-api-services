@@ -8,12 +8,13 @@ import 'package:baaba_api_handler/src/config/cache_policy.dart';
 import 'package:baaba_api_handler/src/dio_factory.dart';
 import 'package:baaba_api_handler/src/utils/cache_key.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
-import 'package:baaba_api_handler/src/utils/error_body.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 import 'package:baaba_api_handler/src/utils/failure.dart';
 import 'package:baaba_api_handler/src/utils/http_methods.dart';
 import 'package:baaba_api_handler/src/utils/network_info.dart';
+import 'package:baaba_api_handler/src/utils/success_check.dart';
+import 'package:baaba_api_handler/src/utils/refresh_zone.dart';
 import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:baaba_api_handler/src/utils/response_strings.dart';
 import 'package:baaba_api_handler/src/utils/upload_file.dart';
@@ -120,6 +121,12 @@ abstract interface class ApiServices {
   /// dialog.
   static int _activeLoadingCount = 0;
 
+  /// Bumped by [reset], so a request that was already holding the loader
+  /// when the count was zeroed does not decrement the fresh count when it
+  /// finishes. Without it the count went negative, and the next request's
+  /// increment landed on zero — so the loader never showed again.
+  static int _loaderEpoch = 0;
+
   /// The configuration currently in effect. Read-only — call [init] to change
   /// it.
   static ApiConfig get config => _config;
@@ -181,12 +188,22 @@ abstract interface class ApiServices {
   /// client.
   ///
   /// The next [instance] call builds a fresh default client.
+  ///
+  /// Requests still in flight on the discarded client are cancelled, and
+  /// complete with `ErrorSource.cancel`. Left running, one that finished
+  /// after a logout's `clearAllCache()` would write the previous user's
+  /// response straight back into the cache — and its token would still be
+  /// the previous user's. [init] does not do this, since re-configuring is
+  /// not necessarily a change of user.
   static void reset() {
+    final previous = _instance;
+    if (previous is ApiServicesImplementation) previous._close();
     _instance = null;
     _config = const ApiConfig();
     _onLoadingShow = null;
     _onLoadingHide = null;
     _activeLoadingCount = 0;
+    _loaderEpoch++;
   }
 
   /// Configures a global loading indicator shown automatically around every
@@ -667,20 +684,24 @@ class ApiServicesImplementation implements ApiServices {
     accept: applicationJson,
   };
 
-  // Tracks every active CancelToken, against the tag its request was made
-  // under (null when it was made without one), so cancelRequest() can cancel
+  // Tracks every active CancelToken, against the tags of the requests using
+  // it (null for one made without a tag), so cancelRequest() can cancel
   // either everything or just one screen's worth.
-  final Map<CancelToken, String?> _activeTokens = {};
+  //
+  // A list, one entry per request, because a caller may share one token
+  // across several requests. Keyed one-to-one, the first of them to finish
+  // unregistered the token for all the rest, and cancelRequest() could no
+  // longer reach them.
+  final Map<CancelToken, List<String?>> _activeTokens = {};
+
+  // Set by ApiServices.reset(): a discarded client sends nothing further.
+  bool _closed = false;
 
   // Identical GETs in flight at the same time share one network call.
   final Map<String, Future<Either<Failure, Response>>> _inFlight = {};
 
   // Caps how many requests actually reach the network at once.
   final _RequestGate _gate;
-
-  // Reference-counted so concurrent requests share one indicator: onShow
-  // fires only for the first in-flight request, onHide only once none remain.
-  // The counter lives on ApiServices, since the indicator is global.
 
   ApiServicesImplementation._({
     required Dio dio,
@@ -714,102 +735,43 @@ class ApiServicesImplementation implements ApiServices {
 
   /// Outermost layer: loader accounting and cache policy.
   Future<Either<Failure, Response>> _sendRequest(
-    HttpMethod method, {
-    required String endpoint,
-    Object? data,
-    Map<String, dynamic>? params,
-    Duration? receiveTimeout,
-    Duration? sendTimeout,
-    Map<String, String>? headers,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-    CancelToken? cancelToken,
-    ResponseType? responseType,
-    String? tag,
+    _Call call, {
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
-    bool dedupe = false,
   }) async {
-    if (showLoader) _showLoader();
+    final epoch = showLoader ? _showLoader() : null;
     try {
       // Reported here, at the one layer that runs once per caller. Deeper
       // layers are shared: de-duplication collapses two callers onto one
       // _performRequest, so notifying from there would emit a single event
       // for two calls.
-      return _notify(await _resolve(
-        method,
-        endpoint: endpoint,
-        data: data,
-        params: params,
-        receiveTimeout: receiveTimeout,
-        sendTimeout: sendTimeout,
-        headers: headers,
-        onSendProgress: onSendProgress,
-        onReceiveProgress: onReceiveProgress,
-        cancelToken: cancelToken,
-        responseType: responseType,
-        tag: tag,
-        cachePolicy: cachePolicy,
-        cacheMaxAge: cacheMaxAge,
-        dedupe: dedupe,
-      ));
+      return _notify(await _resolve(call));
     } finally {
-      if (showLoader) _hideLoader();
+      if (epoch != null) _hideLoader(epoch);
     }
   }
 
   /// Applies the cache policy around the network call.
-  Future<Either<Failure, Response>> _resolve(
-    HttpMethod method, {
-    required String endpoint,
-    Object? data,
-    Map<String, dynamic>? params,
-    Duration? receiveTimeout,
-    Duration? sendTimeout,
-    Map<String, String>? headers,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-    CancelToken? cancelToken,
-    ResponseType? responseType,
-    String? tag,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
-    bool dedupe = false,
-  }) async {
-    final policy = _effectiveCachePolicy(method, cachePolicy);
+  Future<Either<Failure, Response>> _resolve(_Call call) async {
+    final policy = _effectiveCachePolicy(call);
 
-    final cacheKey = policy == CachePolicy.networkOnly
-        ? null
-        : buildCacheKey(
-            baseUrl: ApiServices._config.baseUrl,
-            endpoint: endpoint,
-            params: params,
-          );
+    final cacheKey =
+        policy == CachePolicy.networkOnly ? null : _cacheKeyFor(call);
+
+    // cacheOnly must never touch the network, even for a request that cannot
+    // be keyed; that is simply a miss.
+    if (policy == CachePolicy.cacheOnly && cacheKey == null) {
+      return left(ErrorSource.cacheError.getFailure());
+    }
 
     if (cacheKey != null && policy != CachePolicy.networkFirst) {
-      final cached = await _readCache(cacheKey, cacheMaxAge);
+      final cached = await _readCache(cacheKey, call.cacheMaxAge);
       if (cached != null) return right(cached);
       if (policy == CachePolicy.cacheOnly) {
         return left(ErrorSource.cacheError.getFailure());
       }
     }
 
-    final result = await _dispatch(
-      method,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
-      dedupe: dedupe,
-    );
+    final result = await _dispatch(call);
 
     if (cacheKey == null) return result;
 
@@ -818,7 +780,7 @@ class ApiServicesImplementation implements ApiServices {
         // networkFirst is the only policy that can still succeed here: serve
         // the last-known-good response rather than an error screen.
         if (policy != CachePolicy.networkFirst) return left(failure);
-        final cached = await _readCache(cacheKey, cacheMaxAge);
+        final cached = await _readCache(cacheKey, call.cacheMaxAge);
         return cached == null ? left(failure) : right(cached);
       },
       (response) async {
@@ -826,6 +788,37 @@ class ApiServicesImplementation implements ApiServices {
         return right(response);
       },
     );
+  }
+
+  /// The cache key for [call], or `null` when it cannot be cached safely.
+  ///
+  /// Additions are suffixes on the url key, made only when they apply, so the
+  /// key for an ordinary JSON GET is unchanged and existing entries stay
+  /// readable:
+  ///
+  /// - a **body**, JSON-encoded: `get` accepts one, and without it two
+  ///   searches differing only in their body shared an entry, so the second
+  ///   was answered with the first's results. A body that will not encode
+  ///   returns `null`.
+  /// - a **plain-text** response type: under the shared key, a `plain` caller
+  ///   was handed the Map a JSON caller of the same url had cached. Binary
+  ///   types never reach here (see [_effectiveCachePolicy]).
+  String? _cacheKeyFor(_Call call) {
+    final buffer = StringBuffer(buildCacheKey(
+      baseUrl: ApiServices._config.baseUrl,
+      endpoint: call.endpoint,
+      params: call.params,
+    ));
+    if (call.responseType == ResponseType.plain) buffer.write('|as:plain');
+    final data = call.data;
+    if (data != null) {
+      try {
+        buffer.write('|body:${jsonEncode(data)}');
+      } catch (_) {
+        return null;
+      }
+    }
+    return buffer.toString();
   }
 
   /// Reports an outcome to the observer and passes it straight through.
@@ -843,71 +836,14 @@ class ApiServicesImplementation implements ApiServices {
   }
 
   /// Middle layer: collapses concurrent identical requests onto one call.
-  Future<Either<Failure, Response>> _dispatch(
-    HttpMethod method, {
-    required String endpoint,
-    Object? data,
-    Map<String, dynamic>? params,
-    Duration? receiveTimeout,
-    Duration? sendTimeout,
-    Map<String, String>? headers,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-    CancelToken? cancelToken,
-    ResponseType? responseType,
-    String? tag,
-    bool dedupe = false,
-  }) {
-    // A caller-supplied token is theirs to cancel. Sharing one network call
-    // between two callers would let either of them cancel the other's request,
-    // so opt out rather than surprise them.
-    //
-    // A tag is the same hazard by another name: cancelRequest(tag: 'feed')
-    // would abort a collapsed request that a caller under a different tag —
-    // or no tag at all — is still waiting on. Both opt out.
-    final canDedupe = dedupe && cancelToken == null && tag == null;
-    if (!canDedupe) {
-      return _performRequest(
-        method,
-        endpoint: endpoint,
-        data: data,
-        params: params,
-        receiveTimeout: receiveTimeout,
-        sendTimeout: sendTimeout,
-        headers: headers,
-        onSendProgress: onSendProgress,
-        onReceiveProgress: onReceiveProgress,
-        cancelToken: cancelToken,
-        responseType: responseType,
-        tag: tag,
-      );
-    }
-
-    final key = buildRequestKey(
-      method: method.value,
-      baseUrl: ApiServices._config.baseUrl,
-      endpoint: endpoint,
-      params: params,
-      data: data,
-    );
+  Future<Either<Failure, Response>> _dispatch(_Call call) {
+    final key = _dedupeKey(call);
+    if (key == null) return _performRequest(call);
 
     final existing = _inFlight[key];
     if (existing != null) return existing;
 
-    final future = _performRequest(
-      method,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
-    );
+    final future = _performRequest(call);
     _inFlight[key] = future;
 
     // Only the originator owns the entry, so the follower awaiting `existing`
@@ -915,51 +851,125 @@ class ApiServicesImplementation implements ApiServices {
     return future.whenComplete(() => _inFlight.remove(key));
   }
 
-  /// Innermost layer: connectivity, the Dio call, and outcome reporting.
-  Future<Either<Failure, Response>> _performRequest(
-    HttpMethod method, {
-    required String endpoint,
-    Object? data,
-    Map<String, dynamic>? params,
-    Duration? receiveTimeout,
-    Duration? sendTimeout,
-    Map<String, String>? headers,
-    ProgressCallback? onSendProgress,
-    ProgressCallback? onReceiveProgress,
-    CancelToken? cancelToken,
-    ResponseType? responseType,
-    String? tag,
-  }) async {
-    final offline = await _checkConnectivity();
-    if (offline != null) return left(offline);
+  /// The de-duplication key for [call], or `null` when it must go out alone.
+  String? _dedupeKey(_Call call) {
+    // A caller-supplied token is theirs to cancel. Sharing one network call
+    // between two callers would let either of them cancel the other's request,
+    // so opt out rather than surprise them.
+    //
+    // A tag is the same hazard by another name: cancelRequest(tag: 'feed')
+    // would abort a collapsed request that a caller under a different tag —
+    // or no tag at all — is still waiting on.
+    //
+    // Progress callbacks belong to one caller too. Only the originator's are
+    // handed to Dio, so a follower's progress bar would sit at zero until the
+    // response arrived.
+    if (!call.dedupe ||
+        call.cancelToken != null ||
+        call.tag != null ||
+        call.onSendProgress != null ||
+        call.onReceiveProgress != null) {
+      return null;
+    }
 
-    final token = cancelToken ?? CancelToken();
-    // Registered before queuing, not after, so a request still waiting for a
-    // slot can be cancelled like any other.
-    _activeTokens[token] = tag;
-    await _gate.acquire();
-    try {
-      final response = await _dio.request(
-        endpoint,
-        data: data,
-        queryParameters: params,
-        options: Options(
-          method: method.value,
-          receiveTimeout: receiveTimeout,
-          sendTimeout: sendTimeout,
-          responseType: responseType,
-          headers: _headersFor(data, headers),
+    return buildRequestKey(
+      method: call.method.value,
+      baseUrl: ApiServices._config.baseUrl,
+      endpoint: call.endpoint,
+      params: call.params,
+      data: call.data,
+      headers: call.headers,
+      responseType: call.responseType?.name,
+    );
+  }
+
+  /// Innermost layer: connectivity and the Dio call.
+  Future<Either<Failure, Response>> _performRequest(_Call call) {
+    return _tracked(call.cancelToken, call.tag, (token) async {
+      final offline = await _checkConnectivity();
+      if (offline != null) return left(offline);
+      // Cancelled while the probe ran — by cancelRequest(), or a reset() on
+      // logout. Nothing has been sent, so nothing should be.
+      if (token.isCancelled) return left(ErrorSource.cancel.getFailure());
+
+      final result = await _throughGate(
+        token,
+        (token) => _dio.request(
+          call.endpoint,
+          data: call.data,
+          queryParameters: call.params,
+          options: Options(
+            method: call.method.value,
+            receiveTimeout: call.receiveTimeout,
+            sendTimeout: call.sendTimeout,
+            responseType: call.responseType,
+            headers: _headersFor(call.data, call.headers),
+          ),
+          cancelToken: token,
+          onSendProgress: call.onSendProgress,
+          onReceiveProgress: call.onReceiveProgress,
         ),
-        cancelToken: token,
-        onSendProgress: onSendProgress,
-        onReceiveProgress: onReceiveProgress,
       );
-      return _evaluate(response);
+      return result.flatMap(_evaluate);
+    });
+  }
+
+  /// Runs [body] with a token registered for [cancelRequest] for the whole of
+  /// the request's life — the connectivity probe and the queue included, not
+  /// only the network call. Registered any later, a cancelRequest() or a
+  /// reset() that landed during the probe missed the request, which then went
+  /// out anyway.
+  Future<Either<Failure, Response>> _tracked(
+    CancelToken? cancelToken,
+    String? tag,
+    Future<Either<Failure, Response>> Function(CancelToken token) body,
+  ) async {
+    final token = cancelToken ?? CancelToken();
+    (_activeTokens[token] ??= []).add(tag);
+    // A request reaching a client that reset() has discarded — an upload
+    // that was still reading its files, say — must not go out either.
+    if (_closed) token.cancel(_closedReason);
+    try {
+      return await body(token);
+    } finally {
+      final tags = _activeTokens[token];
+      if (tags != null) {
+        tags.remove(tag);
+        if (tags.isEmpty) _activeTokens.remove(token);
+      }
+    }
+  }
+
+  static const String _closedReason = 'ApiServices.reset()';
+
+  /// Called by `ApiServices.reset()`: cancels everything in flight and
+  /// refuses anything that arrives later.
+  void _close() {
+    _closed = true;
+    cancelRequest(cancellationReason: _closedReason);
+  }
+
+  /// Runs [send] once the concurrency gate admits it.
+  ///
+  /// A request made on behalf of a token refresh skips the gate: the requests
+  /// that `401`'d hold their slots while they wait for it, so queueing it
+  /// behind them deadlocked a cap of one. See `refresh_zone.dart`.
+  Future<Either<Failure, Response>> _throughGate(
+    CancelToken token,
+    Future<Response> Function(CancelToken token) send,
+  ) async {
+    final gated = !isInsideTokenRefresh;
+    // A cancel while queued fails the wait itself. No slot was taken, so
+    // there is none to release, and no request was built to attach.
+    if (gated && !await _gate.acquire(token)) {
+      return left(ErrorSource.cancel.getFailure());
+    }
+    try {
+      return right(await send(token));
     } catch (e) {
       return left(_toFailure(e));
     } finally {
-      _gate.release();
-      _activeTokens.remove(token);
+      if (gated) _gate.release();
     }
   }
 
@@ -979,11 +989,21 @@ class ApiServicesImplementation implements ApiServices {
   /// would return the first one's response without ever reaching the server.
   /// Cache keys carry no method or body either, so a `POST` and a `GET` to one
   /// path share an entry.
-  CachePolicy _effectiveCachePolicy(HttpMethod method, CachePolicy? requested) {
+  ///
+  /// Binary responses are not cached either. Entries are stored as JSON, so a
+  /// `bytes` body would come back as a `List<dynamic>` rather than the
+  /// `Uint8List` the caller asked for, and a `stream` body cannot be stored at
+  /// all. Worse, the key has no response type in it, so a `bytes` caller could
+  /// be served a map cached by a JSON caller of the same url.
+  CachePolicy _effectiveCachePolicy(_Call call) {
     final config = ApiServices._config;
     if (!config.cacheEnabled) return CachePolicy.networkOnly;
-    if (method != HttpMethod.get) return CachePolicy.networkOnly;
-    return requested ?? config.defaultCachePolicy;
+    if (call.method != HttpMethod.get) return CachePolicy.networkOnly;
+    if (call.responseType == ResponseType.bytes ||
+        call.responseType == ResponseType.stream) {
+      return CachePolicy.networkOnly;
+    }
+    return call.cachePolicy ?? config.defaultCachePolicy;
   }
 
   /// Picks the headers for a request.
@@ -1015,37 +1035,8 @@ class ApiServicesImplementation implements ApiServices {
   }
 
   /// Applies `ApiConfig.isSuccess` to a 2xx response.
-  Either<Failure, Response> _evaluate(Response response) {
-    final isSuccess = ApiServices._config.isSuccess;
-    if (isSuccess == null || isSuccess(response)) return right(response);
-
-    // A 2xx the consumer's predicate rejected — e.g. {"success": false}.
-    // Give them first refusal on the resulting Failure, so an API that
-    // reports its own error codes in the body can surface one instead of
-    // collapsing to a generic bad request. Wrapped, because a builder that
-    // throws must not turn a response into an exception.
-    final onRejected = ApiServices._config.onRejected;
-    if (onRejected != null) {
-      try {
-        final custom = onRejected(response);
-        if (custom != null) {
-          return left(custom.withRequest(response.requestOptions));
-        }
-      } catch (_) {}
-    }
-
-    // Read the message from the body the same way a real error response would.
-    final body = response.data;
-    final message = extractErrorMessage(body);
-    return left(Failure(
-      ErrorSource.badRequest,
-      ResponseCode.badRequest,
-      message.isNotEmpty ? message : ResponseStrings.badRequest,
-      data: body,
-      statusCode: response.statusCode,
-      requestOptions: response.requestOptions,
-    ));
-  }
+  Either<Failure, Response> _evaluate(Response response) =>
+      evaluateSuccess(response, ApiServices._config);
 
   /// Converts a thrown error into a `Failure`, keeping the request that
   /// produced it so the observer can say which call failed.
@@ -1120,18 +1111,44 @@ class ApiServicesImplementation implements ApiServices {
   // Loader
   // ---------------------------------------------------------------------------
 
-  void _showLoader() {
+  // Reference-counted so concurrent requests share one indicator: onShow
+  // fires only for the first in-flight request, onHide only once none remain.
+  // The counter lives on ApiServices, since the indicator is global.
+
+  /// Takes a hold on the loader, returning the epoch to hand back to
+  /// [_hideLoader].
+  int _showLoader() {
     ApiServices._activeLoadingCount++;
     if (ApiServices._activeLoadingCount == 1) {
-      ApiServices._onLoadingShow?.call();
+      _callLoader(ApiServices._onLoadingShow);
+    }
+    return ApiServices._loaderEpoch;
+  }
+
+  /// Releases a hold taken in [epoch]. A hold from before the last
+  /// `ApiServices.reset()` was already discarded with the count, so it is
+  /// ignored rather than subtracted from requests made since.
+  void _hideLoader(int epoch) {
+    if (epoch != ApiServices._loaderEpoch) return;
+    ApiServices._activeLoadingCount--;
+    if (ApiServices._activeLoadingCount == 0) {
+      _callLoader(ApiServices._onLoadingHide);
     }
   }
 
-  void _hideLoader() {
-    ApiServices._activeLoadingCount--;
-    if (ApiServices._activeLoadingCount == 0) {
-      ApiServices._onLoadingHide?.call();
-    }
+  /// Runs a loader callback, which must never break the request around it —
+  /// the same rule the observer follows.
+  ///
+  /// The documented wiring makes a throw likely, not exotic:
+  /// `navigatorKey.currentContext!` before the navigator has mounted,
+  /// `currentState!.pop()` once something else has closed the dialog. A
+  /// throwing `onShow` escaped as an exception and left the count stuck, so
+  /// the loader never showed again; a throwing `onHide`, which runs in a
+  /// `finally`, replaced the request's result with its own exception.
+  static void _callLoader(void Function()? callback) {
+    try {
+      callback?.call();
+    } catch (_) {}
   }
 
   // ---------------------------------------------------------------------------
@@ -1187,22 +1204,24 @@ class ApiServicesImplementation implements ApiServices {
     bool dedupe = true,
   }) {
     return _sendRequest(
-      HttpMethod.get,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
+      _Call(
+        HttpMethod.get,
+        endpoint: endpoint,
+        data: data,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+        cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
+        cachePolicy: cachePolicy,
+        cacheMaxAge: cacheMaxAge,
+        dedupe: dedupe,
+      ),
       showLoader: showLoader,
-      cachePolicy: cachePolicy,
-      cacheMaxAge: cacheMaxAge,
-      dedupe: dedupe,
     );
   }
 
@@ -1263,18 +1282,20 @@ class ApiServicesImplementation implements ApiServices {
     bool showLoader = true,
   }) {
     return _sendRequest(
-      HttpMethod.post,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
+      _Call(
+        HttpMethod.post,
+        endpoint: endpoint,
+        data: data,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+        cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
+      ),
       showLoader: showLoader,
     );
   }
@@ -1330,18 +1351,20 @@ class ApiServicesImplementation implements ApiServices {
     bool showLoader = true,
   }) {
     return _sendRequest(
-      HttpMethod.put,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
+      _Call(
+        HttpMethod.put,
+        endpoint: endpoint,
+        data: data,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+        cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
+      ),
       showLoader: showLoader,
     );
   }
@@ -1397,18 +1420,20 @@ class ApiServicesImplementation implements ApiServices {
     bool showLoader = true,
   }) {
     return _sendRequest(
-      HttpMethod.delete,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
+      _Call(
+        HttpMethod.delete,
+        endpoint: endpoint,
+        data: data,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+        cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
+      ),
       showLoader: showLoader,
     );
   }
@@ -1464,18 +1489,20 @@ class ApiServicesImplementation implements ApiServices {
     bool showLoader = true,
   }) {
     return _sendRequest(
-      HttpMethod.patch,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      onSendProgress: onSendProgress,
-      onReceiveProgress: onReceiveProgress,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
+      _Call(
+        HttpMethod.patch,
+        endpoint: endpoint,
+        data: data,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+        cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
+      ),
       showLoader: showLoader,
     );
   }
@@ -1528,16 +1555,18 @@ class ApiServicesImplementation implements ApiServices {
     bool dedupe = true,
   }) {
     return _sendRequest(
-      HttpMethod.head,
-      endpoint: endpoint,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      cancelToken: cancelToken,
-      tag: tag,
+      _Call(
+        HttpMethod.head,
+        endpoint: endpoint,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        cancelToken: cancelToken,
+        tag: tag,
+        dedupe: dedupe,
+      ),
       showLoader: showLoader,
-      dedupe: dedupe,
     );
   }
 
@@ -1555,17 +1584,19 @@ class ApiServicesImplementation implements ApiServices {
     bool dedupe = true,
   }) {
     return _sendRequest(
-      HttpMethod.options,
-      endpoint: endpoint,
-      params: params,
-      receiveTimeout: receiveTimeout,
-      sendTimeout: sendTimeout,
-      headers: headers,
-      cancelToken: cancelToken,
-      responseType: responseType,
-      tag: tag,
+      _Call(
+        HttpMethod.options,
+        endpoint: endpoint,
+        params: params,
+        receiveTimeout: receiveTimeout,
+        sendTimeout: sendTimeout,
+        headers: headers,
+        cancelToken: cancelToken,
+        responseType: responseType,
+        tag: tag,
+        dedupe: dedupe,
+      ),
       showLoader: showLoader,
-      dedupe: dedupe,
     );
   }
 
@@ -1585,14 +1616,18 @@ class ApiServicesImplementation implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) async {
-    if (showLoader) _showLoader();
+    final epoch = showLoader ? _showLoader() : null;
     try {
       final FormData formData;
       try {
-        formData = FormData.fromMap({
-          ...fields,
-          for (final file in files) file.field: await file.toMultipartFile(),
-        });
+        // Files are appended as entries, not put in the map: several files
+        // under one field — `images` for a gallery — would be duplicate keys
+        // there, and all but the last would silently vanish.
+        formData = FormData.fromMap(fields);
+        for (final file in files) {
+          formData.files
+              .add(MapEntry(file.field, await file.toMultipartFile()));
+        }
       } catch (e) {
         // A missing or unreadable file should surface as a Failure like
         // anything else, not as an exception out of an Either-returning API.
@@ -1601,23 +1636,25 @@ class ApiServicesImplementation implements ApiServices {
       }
 
       return await _sendRequest(
-        method,
-        endpoint: endpoint,
-        data: formData,
-        params: params,
-        receiveTimeout: receiveTimeout,
-        sendTimeout: sendTimeout,
-        headers: headers,
-        onSendProgress: onSendProgress,
-        cancelToken: cancelToken,
-        responseType: responseType,
-        tag: tag,
+        _Call(
+          method,
+          endpoint: endpoint,
+          data: formData,
+          params: params,
+          receiveTimeout: receiveTimeout,
+          sendTimeout: sendTimeout,
+          headers: headers,
+          onSendProgress: onSendProgress,
+          cancelToken: cancelToken,
+          responseType: responseType,
+          tag: tag,
+        ),
         // The loader is already held for the whole operation, file reads
         // included; nesting another show/hide would double-count it.
         showLoader: false,
       );
     } finally {
-      if (showLoader) _hideLoader();
+      if (epoch != null) _hideLoader(epoch);
     }
   }
 
@@ -1635,47 +1672,42 @@ class ApiServicesImplementation implements ApiServices {
     bool deleteOnError = true,
     bool showLoader = true,
   }) async {
-    if (showLoader) _showLoader();
+    final epoch = showLoader ? _showLoader() : null;
     try {
       // download() has its own path rather than going through _sendRequest —
       // it streams to disk and no cache policy or de-duplication applies — so
       // it reports its own outcome.
-      final offline = await _checkConnectivity();
-      if (offline != null) return _notify(left(offline));
+      return _notify(await _tracked(cancelToken, tag, (token) async {
+        final offline = await _checkConnectivity();
+        if (offline != null) return left(offline);
+        if (token.isCancelled) return left(ErrorSource.cancel.getFailure());
 
-      final token = cancelToken ?? CancelToken();
-      _activeTokens[token] = tag;
-      await _gate.acquire();
-      try {
-        final response = await _dio.download(
-          endpoint,
-          savePath,
-          queryParameters: params,
-          options: Options(
-            receiveTimeout: receiveTimeout,
-            sendTimeout: sendTimeout,
-            headers: headers ?? _defaultHeader,
+        return _throughGate(
+          token,
+          (token) => _dio.download(
+            endpoint,
+            savePath,
+            queryParameters: params,
+            options: Options(
+              receiveTimeout: receiveTimeout,
+              sendTimeout: sendTimeout,
+              headers: headers ?? _defaultHeader,
+            ),
+            cancelToken: token,
+            onReceiveProgress: onReceiveProgress,
+            deleteOnError: deleteOnError,
           ),
-          cancelToken: token,
-          onReceiveProgress: onReceiveProgress,
-          deleteOnError: deleteOnError,
         );
-        return _notify(right(response));
-      } catch (e) {
-        return _notify(left(_toFailure(e)));
-      } finally {
-        _gate.release();
-        _activeTokens.remove(token);
-      }
+      }));
     } finally {
-      if (showLoader) _hideLoader();
+      if (epoch != null) _hideLoader(epoch);
     }
   }
 
   @override
   void cancelRequest({String? tag, String cancellationReason = ''}) {
     final targets = _activeTokens.entries
-        .where((entry) => tag == null || entry.value == tag)
+        .where((entry) => tag == null || entry.value.contains(tag))
         .map((entry) => entry.key)
         .toList();
 
@@ -1683,6 +1715,45 @@ class ApiServicesImplementation implements ApiServices {
       token.cancel(cancellationReason);
     }
   }
+}
+
+/// Everything one call asked for, carried down the pipeline as a single
+/// value rather than re-listed as fifteen named parameters at every layer —
+/// where forgetting to forward one compiles cleanly and silently drops it.
+class _Call {
+  final HttpMethod method;
+  final String endpoint;
+  final Object? data;
+  final Map<String, dynamic>? params;
+  final Duration? receiveTimeout;
+  final Duration? sendTimeout;
+  final Map<String, String>? headers;
+  final ProgressCallback? onSendProgress;
+  final ProgressCallback? onReceiveProgress;
+  final CancelToken? cancelToken;
+  final ResponseType? responseType;
+  final String? tag;
+  final CachePolicy? cachePolicy;
+  final Duration? cacheMaxAge;
+  final bool dedupe;
+
+  const _Call(
+    this.method, {
+    required this.endpoint,
+    this.data,
+    this.params,
+    this.receiveTimeout,
+    this.sendTimeout,
+    this.headers,
+    this.onSendProgress,
+    this.onReceiveProgress,
+    this.cancelToken,
+    this.responseType,
+    this.tag,
+    this.cachePolicy,
+    this.cacheMaxAge,
+    this.dedupe = false,
+  });
 }
 
 /// Caps how many requests may be in flight at once, per client.
@@ -1697,21 +1768,36 @@ class _RequestGate {
   final int? limit;
 
   int _active = 0;
-  final Queue<Completer<void>> _waiting = Queue<Completer<void>>();
+  final Queue<Completer<bool>> _waiting = Queue<Completer<bool>>();
 
-  _RequestGate(this.limit);
+  /// A cap below one is rejected by `ApiConfig`'s assert in debug builds. In
+  /// release it is raised to one rather than honoured: zero slots would queue
+  /// every request forever, with the loader up.
+  _RequestGate(int? limit) : limit = limit == null || limit > 0 ? limit : 1;
 
-  Future<void> acquire() {
+  /// Waits for a slot. Completes `true` once one is held, or `false` if
+  /// [token] is cancelled while still queued — in which case no slot was
+  /// taken and [release] must not be called.
+  ///
+  /// The wait happens outside Dio, so Dio's own cancellation cannot reach it.
+  /// Without listening here, `cancelRequest()` on a queued request did
+  /// nothing until a slot freed up — behind a long upload, that is the whole
+  /// upload, with the loader showing throughout.
+  Future<bool> acquire(CancelToken token) {
     final cap = limit;
-    if (cap == null) return Future<void>.value();
+    if (cap == null) return Future<bool>.value(true);
 
     if (_active < cap) {
       _active++;
-      return Future<void>.value();
+      return Future<bool>.value(true);
     }
 
-    final waiter = Completer<void>();
+    final waiter = Completer<bool>();
     _waiting.add(waiter);
+    token.whenCancel.then((_) {
+      // Still queued means release() never handed it a slot.
+      if (_waiting.remove(waiter)) waiter.complete(false);
+    });
     return waiter.future;
   }
 
@@ -1723,7 +1809,7 @@ class _RequestGate {
     // the queue first-in-first-out, so a request made early cannot be starved
     // by a burst of later ones.
     if (_waiting.isNotEmpty) {
-      _waiting.removeFirst().complete();
+      _waiting.removeFirst().complete(true);
       return;
     }
 

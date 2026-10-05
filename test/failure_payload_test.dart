@@ -138,5 +138,27 @@ void main() {
       expect(extractErrorMessage(42), isEmpty);
       expect(extractErrorMessage({'unrelated': 'value'}), isEmpty);
     });
+
+    test('an HTML error page is not a message', () {
+      // What nginx or Cloudflare send for a 502 — not for a snackbar.
+      expect(
+        extractErrorMessage(
+            '<html><body><h1>502 Bad Gateway</h1></body></html>'),
+        isEmpty,
+      );
+      expect(extractErrorMessage('\n  <!DOCTYPE html><html></html>'), isEmpty);
+    });
+
+    test('skips flags and blanks for a key that carries a message', () {
+      expect(extractErrorMessage({'error': true}), isEmpty);
+      expect(
+        extractErrorMessage({'message': '', 'error': 'Account locked'}),
+        'Account locked',
+      );
+      expect(
+        extractErrorMessage({'error': true, 'detail': 'Account locked'}),
+        'Account locked',
+      );
+    });
   });
 }

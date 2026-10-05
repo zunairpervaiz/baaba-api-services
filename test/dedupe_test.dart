@@ -11,6 +11,13 @@ class MockDio extends Mock implements Dio {}
 
 class MockNetworkInfo extends Mock implements NetworkInfo {}
 
+/// A request body with `toJson` but no `toString`.
+class _Query {
+  final String term;
+  _Query(this.term);
+  Map<String, dynamic> toJson() => {'term': term};
+}
+
 void main() {
   late MockDio mockDio;
   late MockNetworkInfo mockNetworkInfo;
@@ -221,5 +228,124 @@ void main() {
         (_) => fail('Expected a failure'),
       );
     }
+  });
+
+  test('a reset() mid-request does not break the loader for good', () async {
+    ApiServices.configureLoader(onShow: () {}, onHide: () {});
+    final inFlight = api.get(endpoint: '/users');
+
+    // reset() zeroes the count while that request still holds the loader.
+    ApiServices.reset();
+    var shows = 0;
+    var hides = 0;
+    ApiServices.configureLoader(onShow: () => shows++, onHide: () => hides++);
+
+    gate.complete();
+    await inFlight;
+    // Its release used to take the count to -1, so the next request's
+    // increment landed on 0 and the loader never showed again.
+    await api.get(endpoint: '/users', dedupe: false);
+
+    expect(shows, 1);
+    expect(hides, 1);
+  });
+
+  group('a broken loader callback never breaks a request', () {
+    setUp(() => gate.complete());
+
+    test('a throwing onShow', () async {
+      // `showDialog(context: navigatorKey.currentContext!, ...)` before the
+      // navigator has mounted.
+      var shows = 0;
+      ApiServices.configureLoader(
+        onShow: () {
+          shows++;
+          throw StateError('no navigator yet');
+        },
+        onHide: () {},
+      );
+
+      final first = await api.get(endpoint: '/users', dedupe: false);
+      final second = await api.get(endpoint: '/users', dedupe: false);
+
+      expect(first.isRight(), isTrue);
+      expect(second.isRight(), isTrue);
+      expect(shows, 2, reason: 'the count must not be left stuck at one');
+    });
+
+    test('a throwing onHide', () async {
+      // `navigatorKey.currentState!.pop()` with the dialog already gone.
+      ApiServices.configureLoader(
+        onShow: () {},
+        onHide: () => throw StateError('nothing to pop'),
+      );
+
+      final result = await api.get(endpoint: '/users');
+
+      expect(result.isRight(), isTrue,
+          reason: 'onHide runs in a finally, so its throw replaced the result');
+    });
+  });
+
+  group('only collapses requests that would get the same answer', () {
+    Future<void> expectSeparate(List<Future<Object>> calls) async {
+      final all = Future.wait(calls);
+      gate.complete();
+      await all;
+      expect(networkCalls, calls.length);
+    }
+
+    test('differing headers are not collapsed', () async {
+      // Otherwise the Urdu caller is handed the English response.
+      await expectSeparate([
+        api.get(endpoint: '/users', headers: {'Accept-Language': 'en'}),
+        api.get(endpoint: '/users', headers: {'Accept-Language': 'ur'}),
+      ]);
+    });
+
+    test('header names compare case-insensitively', () async {
+      final both = Future.wait([
+        api.get(endpoint: '/users', headers: {'Accept-Language': 'en'}),
+        api.get(endpoint: '/users', headers: {'accept-language': 'en'}),
+      ]);
+      gate.complete();
+      await both;
+
+      expect(networkCalls, 1);
+    });
+
+    test('differing response types are not collapsed', () async {
+      // Otherwise the bytes caller is handed a decoded map.
+      await expectSeparate([
+        api.get(endpoint: '/avatar'),
+        api.get(endpoint: '/avatar', responseType: ResponseType.bytes),
+      ]);
+    });
+
+    test('bodies are compared by content, not by toString()', () async {
+      // Neither has a toString of its own, so both print as
+      // "Instance of '_Query'" — which made them the same request.
+      await expectSeparate([
+        api.get(endpoint: '/search', data: _Query('cats')),
+        api.get(endpoint: '/search', data: _Query('dogs')),
+      ]);
+    });
+
+    test('a body that cannot be encoded is never collapsed', () async {
+      final body = Object();
+      await expectSeparate([
+        api.get(endpoint: '/search', data: body),
+        api.get(endpoint: '/search', data: body),
+      ]);
+    });
+
+    test('a caller with a progress callback gets its own request', () async {
+      // Only the originator's callback reaches Dio, so a collapsed follower's
+      // progress bar would never move.
+      await expectSeparate([
+        api.get(endpoint: '/report'),
+        api.get(endpoint: '/report', onReceiveProgress: (_, __) {}),
+      ]);
+    });
   });
 }

@@ -310,5 +310,176 @@ void main() {
       expect(
           (await queued).getLeft().toNullable()!.errorType, ErrorSource.cancel);
     });
+
+    test('a queued request cancels at once, not when a slot frees up',
+        () async {
+      final adapter = _Adapter(manual: true);
+      init(adapter, config: const ApiConfig(maxConcurrentRequests: 1));
+      final api = ApiServices.instance();
+
+      final running = api.get(endpoint: '/running', tag: 'a');
+      final queued = api.get(endpoint: '/queued', tag: 'b');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      api.cancelRequest(tag: 'b');
+
+      // /running is still held. Before the fix, /queued sat in the gate until
+      // it was released — behind a long upload, that is the whole upload.
+      final result = await queued.timeout(const Duration(seconds: 1));
+      expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+      expect(adapter.requests.map((r) => r.path), ['/running'],
+          reason: 'a request cancelled in the queue never reaches the network');
+
+      adapter.releaseOne();
+      expect((await running).isRight(), isTrue);
+    });
+
+    test('a request cancelled in the queue gives up its place, not a slot',
+        () async {
+      final adapter = _Adapter(manual: true);
+      init(adapter, config: const ApiConfig(maxConcurrentRequests: 1));
+      final api = ApiServices.instance();
+
+      final running = api.get(endpoint: '/running', tag: 'a');
+      final cancelled = api.get(endpoint: '/cancelled', tag: 'b');
+      final next = api.get(endpoint: '/next', tag: 'c');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      api.cancelRequest(tag: 'b');
+      await cancelled;
+
+      // The slot /running releases must go to /next, and only one may run.
+      adapter.releaseOne();
+      await running;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(adapter.requests.map((r) => r.path), ['/running', '/next']);
+      expect(adapter.active, 1);
+
+      adapter.releaseOne();
+      expect((await next).isRight(), isTrue);
+      expect(adapter.peakActive, 1);
+    });
+  });
+
+  group('ApiServices.reset', () {
+    test('cancels requests still in flight on the discarded client', () async {
+      final adapter = _Adapter(manual: true);
+      init(adapter);
+
+      final inFlight = ApiServices.instance().get(endpoint: '/me');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      // A logout: the previous user's request must not complete afterwards,
+      // or it could write their response back into a just-cleared cache.
+      ApiServices.reset();
+
+      final result = await inFlight.timeout(const Duration(seconds: 1));
+      expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+      adapter.releaseOne();
+    });
+  });
+
+  group('maxConcurrentRequests with token refresh', () {
+    test('a refresh made through the client is not queued behind its waiters',
+        () async {
+      var refreshed = false;
+      final adapter = _Adapter(
+        status: (options) {
+          if (options.path == '/refresh') return 200;
+          return refreshed ? 200 : 401;
+        },
+      );
+      ApiServices.init(ApiConfig(
+        baseUrl: 'https://api.test',
+        bypassConnectivityCheck: true,
+        httpClientAdapter: adapter,
+        retry: const RetryPolicy.disabled(),
+        logging: const ApiLogOptions(enabled: false),
+        maxConcurrentRequests: 1,
+        auth: AuthConfig(
+          getToken: () async => refreshed ? 'new' : 'old',
+          // The README's shape: the refresh goes through the same client.
+          onTokenRefresh: () async {
+            final result = await ApiServices.instance()
+                .post(endpoint: '/refresh', showLoader: false);
+            refreshed = result.isRight();
+            return refreshed;
+          },
+          refreshTimeout: const Duration(seconds: 5),
+        ),
+      ));
+
+      // The /me request holds the only slot while it waits on the refresh,
+      // so a gated /refresh could never start.
+      final result = await ApiServices.instance()
+          .get(endpoint: '/me')
+          .timeout(const Duration(seconds: 2));
+
+      expect(result.isRight(), isTrue);
+      expect(adapter.requests.map((r) => r.path), ['/me', '/refresh', '/me']);
+    });
+  });
+
+  group('cancellation reaches every stage of a request', () {
+    late Completer<bool> probe;
+    late _Adapter adapter;
+
+    setUp(() {
+      probe = Completer<bool>();
+      adapter = _Adapter();
+      ApiServices.init(ApiConfig(
+        baseUrl: 'https://api.test',
+        httpClientAdapter: adapter,
+        retry: const RetryPolicy.disabled(),
+        logging: const ApiLogOptions(enabled: false),
+        connectivityProbe: () => probe.future,
+      ));
+    });
+
+    test('cancelRequest() during the connectivity probe', () async {
+      final pending = ApiServices.instance().get(endpoint: '/feed', tag: 'f');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      ApiServices.instance().cancelRequest(tag: 'f');
+      probe.complete(true);
+
+      final result = await pending;
+      expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+      expect(adapter.requests, isEmpty, reason: 'nothing may be sent');
+    });
+
+    test('reset() during the connectivity probe', () async {
+      // The logout case: the previous user's request was still probing.
+      final pending = ApiServices.instance().get(endpoint: '/me');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      ApiServices.reset();
+      probe.complete(true);
+
+      final result = await pending;
+      expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+      expect(adapter.requests, isEmpty);
+    });
+  });
+
+  test('one CancelToken shared by several requests stays cancellable',
+      () async {
+    final adapter = _Adapter(manual: true);
+    init(adapter);
+    final api = ApiServices.instance();
+    final token = CancelToken();
+
+    final slow = api.get(endpoint: '/slow', cancelToken: token);
+    final fast = api.get(endpoint: '/fast', cancelToken: token);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // /fast finishing used to unregister the token for /slow as well.
+    adapter.gates.removeAt(1).complete();
+    expect((await fast).isRight(), isTrue);
+
+    api.cancelRequest();
+    final result = await slow.timeout(const Duration(seconds: 1));
+    expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+    adapter.releaseOne();
   });
 }

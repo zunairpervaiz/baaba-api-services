@@ -1,10 +1,12 @@
 import 'package:baaba_api_handler/src/api_service.dart';
 import 'package:baaba_api_handler/src/config/cache_policy.dart';
+import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 import 'package:baaba_api_handler/src/utils/failure.dart';
 import 'package:baaba_api_handler/src/utils/http_methods.dart';
 import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:baaba_api_handler/src/utils/response_strings.dart';
+import 'package:baaba_api_handler/src/utils/success_check.dart';
 import 'package:baaba_api_handler/src/utils/upload_file.dart';
 import 'package:dio/dio.dart';
 import 'package:fpdart/fpdart.dart';
@@ -98,7 +100,10 @@ class FakeApiServices implements ApiServices {
     _stubs.putIfAbsent(_key(method, endpoint), () => []).add(result);
   }
 
-  /// Stubs a successful JSON response — the common case.
+  /// Stubs a JSON response — usually a successful one.
+  ///
+  /// A [statusCode] outside `2xx` becomes a failure, as it does in production
+  /// (Dio rejects it), built from the status and [body] like [stubFailure].
   void stubJson(
     HttpMethod method,
     String endpoint,
@@ -106,6 +111,10 @@ class FakeApiServices implements ApiServices {
     int statusCode = 200,
     Map<String, List<String>>? headers,
   }) {
+    if (statusCode < 200 || statusCode >= 300) {
+      stub(method, endpoint, left(failureForStatus(statusCode, body)));
+      return;
+    }
     stub(
       method,
       endpoint,
@@ -135,17 +144,23 @@ class FakeApiServices implements ApiServices {
       return;
     }
 
-    final base = ErrorSource.badRequest.getFailure();
+    // Built exactly as a real error response is: a 401 is `unauthorized`,
+    // and the body's own message wins over the generic one. It used to be
+    // `badRequest` with the generic text whatever the status — so consumer
+    // code branching on `ErrorSource.unauthorized` could not be tested.
+    final built = failureForStatus(statusCode, body);
     stub(
       method,
       endpoint,
-      left(Failure(
-        base.errorType,
-        base.code,
-        message ?? base.message,
-        data: body,
-        statusCode: statusCode,
-      )),
+      left(message == null
+          ? built
+          : Failure(
+              built.errorType,
+              built.code,
+              message,
+              data: built.data,
+              statusCode: built.statusCode,
+            )),
     );
   }
 
@@ -205,7 +220,12 @@ class FakeApiServices implements ApiServices {
     }
 
     // Keep the last entry so repeated polling of one endpoint keeps working.
-    return queue.length == 1 ? queue.first : queue.removeAt(0);
+    final result = queue.length == 1 ? queue.first : queue.removeAt(0);
+
+    // ApiConfig.isSuccess applies here as it does in production, so a stubbed
+    // {"success": false} is a Left in tests too.
+    return result
+        .flatMap((response) => evaluateSuccess(response, ApiServices.config));
   }
 
   Future<Either<Failure, T>> _respondAs<T>(

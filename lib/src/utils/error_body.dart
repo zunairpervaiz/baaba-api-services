@@ -20,16 +20,28 @@ import 'package:baaba_api_handler/src/utils/constants.dart';
 ///
 /// Returns `''` when nothing usable is found — the caller then falls back to
 /// the generic `ResponseStrings` text for the status code.
+///
+/// An HTML body yields `''` too. Gateways and proxies (nginx, Cloudflare,
+/// a load balancer) answer a `502` or `504` with an error *page*, and that
+/// markup is not something to put in front of a user.
 String extractErrorMessage(dynamic data, {int depth = 0}) {
-  if (data is String) return data;
+  if (data is String) {
+    final text = data.trim();
+    return text.startsWith('<') ? '' : text;
+  }
   if (data is! Map || depth > 2) return '';
 
   for (final key in const [messageKey, detailKey, errorKey]) {
     if (!data.containsKey(key)) continue;
 
     final value = data[key];
-    if (value == null) continue;
-    if (value is String) return value;
+    // {"error": true} is a flag, not a message — showing the user "true"
+    // helps no one, and a later key may still have something to say.
+    if (value == null || value is bool) continue;
+    if (value is String) {
+      if (value.trim().isEmpty) continue;
+      return value;
+    }
 
     // {"error": {"message": "..."}} — follow it rather than printing the map.
     if (value is Map) {

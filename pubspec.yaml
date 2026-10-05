@@ -1,6 +1,6 @@
 name: baaba_api_handler
 description: "A typed, functional HTTP client for Flutter. Wraps Dio with Either-based error handling, token refresh, retries, response caching, and a built-in test double."
-version: 3.0.0
+version: 3.1.0
 
 topics:
   - http

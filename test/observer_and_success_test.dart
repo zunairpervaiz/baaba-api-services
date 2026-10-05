@@ -209,6 +209,31 @@ void main() {
     });
   });
 
+  group('isSuccess that throws', () {
+    test('becomes a Failure, never an exception', () async {
+      // A predicate written for an envelope body, meeting a 204's null body.
+      ApiServices.init(ApiConfig(
+        isSuccess: (response) => response.data['success'] == true,
+      ));
+      api = ApiServicesImplementation.instanceFor(
+        dio: mockDio,
+        networkInfo: mockNetworkInfo,
+      );
+      stubNetwork(statusCode: 204);
+
+      final result = await api.delete(endpoint: '/users/1');
+
+      result.fold(
+        (failure) {
+          expect(failure.errorType, ErrorSource.badRequest);
+          expect(failure.statusCode, 204);
+        },
+        (_) => fail('A response the predicate could not confirm is not a '
+            'success'),
+      );
+    });
+  });
+
   group('isSuccess', () {
     setUp(() {
       ApiServices.init(ApiConfig(

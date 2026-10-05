@@ -319,7 +319,11 @@ class ApiConfig {
     this.interceptors = const [],
     this.maxConcurrentRequests,
     this.auth,
-  });
+  }) : assert(
+          maxConcurrentRequests == null || maxConcurrentRequests > 0,
+          'maxConcurrentRequests must be positive, or null for no cap — '
+          'a cap of 0 would queue every request forever.',
+        );
 
   /// Returns a copy with the given fields replaced.
   ///

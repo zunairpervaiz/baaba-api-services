@@ -68,6 +68,14 @@ void main() {
     });
   });
 
+  group('ApiConfig validation', () {
+    test('rejects a concurrency cap that would queue everything forever', () {
+      expect(() => ApiConfig(maxConcurrentRequests: 0), throwsAssertionError);
+      expect(() => ApiConfig(maxConcurrentRequests: -1), throwsAssertionError);
+      expect(ApiConfig(maxConcurrentRequests: 1).maxConcurrentRequests, 1);
+    });
+  });
+
   group('ApiConfig.copyWith', () {
     test('replaces only what it is given', () {
       const base = ApiConfig(

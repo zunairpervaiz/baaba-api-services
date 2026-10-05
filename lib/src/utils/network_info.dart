@@ -36,8 +36,11 @@ class NetworkInfo {
 
   Future<bool> get isConnected {
     final connectedAt = _connectedAt;
-    if (connectedAt != null && _clock().difference(connectedAt) < cacheTtl) {
-      return Future.value(true);
+    if (connectedAt != null) {
+      // A negative age means the wall clock was set back since the probe;
+      // without the check it reads as "fresh" until the clock catches up.
+      final age = _clock().difference(connectedAt);
+      if (!age.isNegative && age < cacheTtl) return Future.value(true);
     }
 
     // The clear is attached with whenComplete rather than living in _runProbe's

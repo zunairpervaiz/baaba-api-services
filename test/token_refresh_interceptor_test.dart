@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:baaba_api_handler/src/interceptors/token_refresh_interceptor.dart';
@@ -282,6 +283,165 @@ void main() {
       await dio.get('/test');
 
       expect(capturedAuthHeader, isNull);
+    });
+
+    test('a replay that throws keeps the real error, not a completer one',
+        () async {
+      var refreshFailedCalls = 0;
+      var tokenReads = 0;
+
+      dio.httpClientAdapter = _MockAdapter((_) async => _unauthorized());
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        // Fine for the original request, broken for the replay — secure
+        // storage failing between the two, say.
+        getToken: () async {
+          if (++tokenReads > 1) throw StateError('storage unavailable');
+          return 'token';
+        },
+        onTokenRefresh: () async => true,
+        onRefreshFailed: () => refreshFailedCalls++,
+      ));
+
+      // The replay's error used to fall into the refresh's catch, which
+      // completed the already-completed completer and threw "Future already
+      // completed" in place of what actually went wrong.
+      await expectLater(
+        dio.get('/test'),
+        throwsA(isA<DioException>().having(
+          (e) => '${e.error}',
+          'error',
+          contains('storage unavailable'),
+        )),
+      );
+
+      // The refresh itself succeeded, so the session is intact.
+      expect(refreshFailedCalls, 0);
+    });
+
+    test('a refresh callback that throws synchronously counts as a failure',
+        () async {
+      var refreshFailedCalls = 0;
+      dio.httpClientAdapter = _MockAdapter((_) async => _unauthorized());
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => 'token',
+        onTokenRefresh: () => throw StateError('not even a future'),
+        onRefreshFailed: () => refreshFailedCalls++,
+      ));
+
+      await expectLater(dio.get('/test'), throwsA(isA<DioException>()));
+      expect(refreshFailedCalls, 1);
+    });
+
+    test(
+        'a 401 for a token that was already replaced replays without '
+        'refreshing again', () async {
+      var token = 'old';
+      var refreshes = 0;
+      final lateRequestSent = Completer<void>();
+      final releaseLate = Completer<void>();
+
+      dio.httpClientAdapter = _MockAdapter((options) async {
+        final sentWith = options.headers['authorization'];
+        if (options.path == '/late' && sentWith == 'Bearer old') {
+          // Sent with the old token, but its 401 arrives only after another
+          // request's refresh has already finished.
+          lateRequestSent.complete();
+          await releaseLate.future;
+          return _unauthorized();
+        }
+        return sentWith == 'Bearer new' ? _ok() : _unauthorized();
+      });
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => token,
+        onTokenRefresh: () async {
+          refreshes++;
+          token = 'new';
+          return true;
+        },
+      ));
+
+      final late = dio.get('/late');
+      await lateRequestSent.future;
+
+      // The first request 401s, refreshes, replays, and is done.
+      await dio.get('/early');
+      expect(refreshes, 1);
+
+      releaseLate.complete();
+      final response = await late;
+
+      expect(response.statusCode, 200);
+      expect(refreshes, 1,
+          reason: 'the token had already been refreshed; with a backend that '
+              'rotates refresh tokens, a second refresh can fail and log the '
+              'user out');
+    });
+
+    test('a throwing onRefreshFailed still surfaces the 401', () async {
+      dio.httpClientAdapter = _MockAdapter((_) async => _unauthorized());
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => 'token',
+        onTokenRefresh: () async => false,
+        // Logout navigation with no context available, say.
+        onRefreshFailed: () => throw StateError('no navigator'),
+      ));
+
+      await expectLater(
+        dio.get('/test'),
+        throwsA(isA<DioException>().having(
+          (e) => e.response?.statusCode,
+          'statusCode',
+          401,
+        )),
+      );
+    });
+
+    test('a late 401 replays even when the token string did not change',
+        () async {
+      // The token check alone cannot see this refresh: the value is the same
+      // before and after (a session renewed server-side, or a getToken that
+      // reads a stale copy while the refresh lands). The generation can.
+      var refreshes = 0;
+      var renewed = false;
+      final lateRequestSent = Completer<void>();
+      final releaseLate = Completer<void>();
+
+      dio.httpClientAdapter = _MockAdapter((options) async {
+        final sentAfterRenewal = options.extra['_tokenGeneration'] != 0;
+        if (options.path == '/late' && !sentAfterRenewal) {
+          lateRequestSent.complete();
+          await releaseLate.future;
+          return _unauthorized();
+        }
+        return renewed && sentAfterRenewal ? _ok() : _unauthorized();
+      });
+
+      dio.interceptors.add(TokenRefreshInterceptor(
+        dio: dio,
+        getToken: () async => 'same',
+        onTokenRefresh: () async {
+          refreshes++;
+          renewed = true;
+          return true;
+        },
+      ));
+
+      final late = dio.get('/late');
+      await lateRequestSent.future;
+      await dio.get('/early');
+      expect(refreshes, 1);
+
+      releaseLate.complete();
+      expect((await late).statusCode, 200);
+      expect(refreshes, 1);
     });
   });
 }

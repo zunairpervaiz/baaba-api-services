@@ -50,7 +50,7 @@ result.fold(
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^3.0.0
+  baaba_api_handler: ^3.1.0
 ```
 
 ```dart
@@ -93,7 +93,7 @@ ApiServices.init(base.copyWith(
 ));
 ```
 
-`ApiServices.reset()` clears the singleton, config, and loader callbacks — useful on logout, and in test `tearDown`.
+`ApiServices.reset()` clears the singleton, config, and loader callbacks, and cancels any requests still in flight on the old client — useful on logout, and in test `tearDown`.
 
 ---
 
@@ -322,7 +322,7 @@ ApiServices.init(ApiConfig(
 ));
 ```
 
-Return `null` to fall back to the generic failure. It is only consulted when `isSuccess` returns `false`.
+Return `null` to fall back to the generic failure. It is only consulted when `isSuccess` returns `false` — or throws, which counts as a rejection rather than escaping as an exception.
 
 ---
 
@@ -341,7 +341,7 @@ ApiServices.init(ApiConfig(
 ));
 ```
 
-A burst of concurrent `401`s — the usual shape of a token expiring — all wait on one refresh and retry, rather than only the first succeeding. `refreshTimeout` bounds that wait, so the pathological case where the refresh endpoint itself `401`s surfaces the original error instead of deadlocking.
+A burst of concurrent `401`s — the usual shape of a token expiring — all wait on one refresh and retry, rather than only the first succeeding. `refreshTimeout` bounds that wait, so the pathological case where the refresh endpoint itself `401`s surfaces the original error instead of deadlocking. A `401` that arrives after another request's refresh has already finished is replayed with the new token rather than triggering a second refresh.
 
 By default the token goes out as `Authorization: Bearer <token>`. `headerBuilder` changes that:
 
@@ -523,7 +523,7 @@ await cache.clearAllCache();
 
 ### De-duplication
 
-Two identical `GET`s in flight at the same time share one network call — the common case being several widgets on one screen asking for the same resource. Pass `dedupe: false` to opt out. It is skipped automatically when you supply your own `CancelToken`, since cancelling one caller must not cancel the other.
+Two identical `GET`s in flight at the same time share one network call — the common case being several widgets on one screen asking for the same resource. Pass `dedupe: false` to opt out. "Identical" means the same url, query, body, headers and `responseType` — a request for bytes is never handed another caller's decoded JSON. It is skipped automatically when you supply your own `CancelToken` or a `tag`, since cancelling one caller must not cancel the other, and when you pass a progress callback, which only one caller's request could drive.
 
 De-duplication is not a cache: sequential requests each hit the network.
 
@@ -756,8 +756,8 @@ test('surfaces a validation error', () async {
 
 | Method | Purpose |
 | --- | --- |
-| `stubJson(method, endpoint, body)` | Queue a successful response. |
-| `stubFailure(method, endpoint, ...)` | Queue a failure, from a `Failure` or a status/body. |
+| `stubJson(method, endpoint, body)` | Queue a response. A non-`2xx` `statusCode` becomes a failure, as it does in production. |
+| `stubFailure(method, endpoint, ...)` | Queue a failure, from a `Failure` or a status/body — built exactly as the real client builds one, so a `401` is `ErrorSource.unauthorized` carrying the body's message. |
 | `stubOffline(method, endpoint)` | Queue the no-connection short-circuit. |
 | `stub(method, endpoint, either)` | Queue a raw `Either` for full control. |
 | `recordedCalls` | Every call made, with endpoint, body, params, headers, files. |
@@ -795,7 +795,7 @@ Every field on `ApiConfig`:
 | `httpClientAdapter` | `null` | Certificate pinning, proxies. |
 | `observer` | `null` | Request/response/failure hook. |
 | `interceptors` | `[]` | Your own Dio interceptors, inserted after auth and before retry. |
-| `maxConcurrentRequests` | `null` | Cap on requests in flight at once. Unlimited when unset. |
+| `maxConcurrentRequests` | `null` | Cap on requests in flight at once. Unlimited when unset; must be positive. A token refresh made through the client is never queued behind it. |
 | `auth` | `null` | Token auth and refresh. |
 
 Settings read at request time take effect immediately: `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheEnabled`, `defaultCachePolicy`, `cacheMaxEntries`, `cacheMaxBytes`, and the observer's `onResponse`/`onFailure`. The rest are fixed when `init` builds the client, so changing them means calling `init` again: `baseUrl`, timeouts, `defaultHeaders`, `logging`, `retry`, `auth`, `interceptors`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and the observer's `onRequest`.

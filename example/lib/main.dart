@@ -49,6 +49,10 @@ class Post {
 }
 
 class PostRepository {
+  /// Every request this repository makes carries this tag, so a screen can
+  /// cancel its own work without touching anyone else's.
+  static const tag = 'posts';
+
   final ApiServices _api;
 
   PostRepository([ApiServices? api]) : _api = api ?? ApiServices.instance();
@@ -61,6 +65,7 @@ class PostRepository {
       params: {'_limit': 20},
       cachePolicy: CachePolicy.networkFirst,
       cacheMaxAge: const Duration(minutes: 5),
+      tag: tag,
     );
   }
 
@@ -69,6 +74,7 @@ class PostRepository {
       endpoint: '/posts',
       parser: (data) => Post.fromJson(data as Map<String, dynamic>),
       data: {'title': title, 'body': body, 'userId': 1},
+      tag: tag,
     );
   }
 }
@@ -107,8 +113,13 @@ class _PostsPageState extends State<PostsPage> {
 
   @override
   void dispose() {
-    // Abort anything still in flight for this screen.
-    ApiServices.instance().cancelRequest(cancellationReason: 'Screen closed');
+    // Abort what is still in flight for this screen — and only that. Without
+    // a tag, cancelRequest() aborts every request in the app, including those
+    // of screens still on the stack.
+    ApiServices.instance().cancelRequest(
+      tag: PostRepository.tag,
+      cancellationReason: 'Screen closed',
+    );
     super.dispose();
   }
 
@@ -171,6 +182,9 @@ class _PostsPageState extends State<PostsPage> {
           child: _error != null
               ? _ErrorView(message: _error!, onRetry: _load)
               : ListView.separated(
+                  // Pull-to-refresh needs something to overscroll, even when
+                  // the list is empty.
+                  physics: const AlwaysScrollableScrollPhysics(),
                   itemCount: _posts.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, index) {
@@ -195,16 +209,25 @@ class _ErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: onRetry, child: const Text('Retry')),
-          ],
+    // Scrollable, so the RefreshIndicator around it still responds to a pull.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(message, textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  FilledButton(onPressed: onRetry, child: const Text('Retry')),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

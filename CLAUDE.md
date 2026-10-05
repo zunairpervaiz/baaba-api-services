@@ -31,7 +31,7 @@ Two identical entrypoints: `lib/baaba_api_handler.dart` (conventional) and `lib/
 
 Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `CachePolicy`, `RetryPolicy`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `ApiCacheHelper`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`/`HttpMethodExtension`, `listParser`, the `CachedResponse` extension, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions`/`ResponseType` (Dio), and `APICacheDBModel`.
 
-Current version: **3.0.0**
+Current version: **3.1.0**
 
 ### Configuration
 
@@ -41,9 +41,9 @@ Everything lives on one `ApiConfig` object passed to `ApiServices.init(...)`. Th
 
 **Which settings apply when.** Anything read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheMaxEntries`, `cacheMaxBytes`, `observer` — takes effect immediately because the implementation reads `ApiServices._config` per call. Anything baked into the Dio client or the `NetworkInfo` — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl` — applies only to the client built by that `init()` call.
 
-`isSuccess` rejections route through `onRejected` first, which may return a `Failure` of its own; `null` or a throwing builder falls back to the generic `badRequest`.
+A throwing `isSuccess` counts as a rejection (fails closed, via `_accepts`). `isSuccess` rejections route through `onRejected` first, which may return a `Failure` of its own; `null` or a throwing builder falls back to the generic `badRequest`.
 
-`ApiServices.reset()` clears the singleton, config, and loader callbacks. Tests should call it in `tearDown`.
+`ApiServices.reset()` clears the singleton, config, and loader callbacks, and cancels the old client's in-flight requests — otherwise one finishing after a logout's `clearAllCache()` writes the previous user's response back. `init()` deliberately does not cancel. Tests should call it in `tearDown`.
 
 ### Request lifecycle
 
@@ -64,6 +64,8 @@ ApiServices.instance().get/post/put/patch/delete/upload/download(...)
 ```
 
 All methods return `Either<Failure, Response>` (fpdart), or `Either<Failure, T>` for the `*As<T>` variants. No exceptions cross the API boundary.
+
+Internally the layers pass one private `_Call` value rather than re-listing every named parameter — a forgotten forward compiles cleanly and silently drops the argument. Only the public methods spell the parameters out.
 
 The three-layer split in `api_service.dart` matters: the loader must be reference-counted per *caller* (outermost), de-duplication must sit above the network call but below the cache, and the connectivity check must be inside the deduped call so two collapsed callers share one probe.
 
@@ -101,7 +103,9 @@ Message extraction lives in `src/utils/error_body.dart` (`extractErrorMessage`),
 
 `ApiConfig.maxConcurrentRequests` is enforced by `_RequestGate`, a FIFO semaphore at the bottom of `api_service.dart`, acquired inside `_performRequest` and `download`. It sits **below** the cache and de-duplication deliberately: the cap is on real network calls, so a cache hit consumes nothing and two collapsed callers consume one slot between them — which is also why a cap of 1 does not deadlock a de-duplicated pair.
 
-The token is registered in `_activeTokens` *before* acquiring, so a request still queued is cancellable. `release()` hands the slot straight to the next waiter rather than decrementing, which keeps `_active` honest and the queue FIFO. A `null` limit short-circuits both methods, so an uncapped client tracks nothing. The limit is read once at construction, so it is a client-built setting, not a request-time one.
+The token is registered in `_activeTokens` *before* acquiring, so a request still queued is cancellable. Dio's own cancellation cannot reach the queue — it sits outside Dio — so `acquire(token)` listens to `token.whenCancel` itself and completes `false`, having taken no slot; the caller must then not `release()`. `_throughGate` wraps this for both `_performRequest` and `download`. `release()` hands the slot straight to the next waiter rather than decrementing, which keeps `_active` honest and the queue FIFO. A `null` limit short-circuits both methods, so an uncapped client tracks nothing. The limit is read once at construction, so it is a client-built setting, not a request-time one.
+
+> **Requests made from inside `onTokenRefresh` skip the gate.** A `401`'d request holds its slot while awaiting the refresh, so a refresh sent through `ApiServices` would queue behind its own waiters — a cap of 1 deadlocked. `TokenRefreshInterceptor` runs the callback via `runAsTokenRefresh` (`src/utils/refresh_zone.dart`), a zone value that follows every async call it makes; `_throughGate` checks `isInsideTokenRefresh`. Retry backoffs still hold their slot — a throughput cost, not a deadlock.
 
 ### Token refresh (`src/interceptors/token_refresh_interceptor.dart`)
 
@@ -110,6 +114,8 @@ Unchanged in 2.0.0 apart from a `fromConfig` factory taking `AuthConfig`. The or
 > **`_shouldAttach` gates both `onRequest` and `onError`.** `baseUrl` supports absolute endpoints — the docs sell that as the way to reach a CDN or third party — so without a host check the bearer token goes wherever the caller points the client. Two consequences, not one: the token leaks, and S3 rejects a presigned URL that also carries an `Authorization` header, so the documented pattern fails. The default is "same host as `dio.options.baseUrl`", overridable per-`Uri` with `AuthConfig.sendTokenTo`; a throwing predicate fails **closed**. `onError` is gated too, or a third party's 401 would trigger a refresh and, on failure, fire `onRefreshFailed` — signing the user out of an app whose own session was never in question. An empty `baseUrl` sends everywhere, since there is nothing to compare against and blocking would break absolute-url-only clients.
 
 On 401: checks `extra['_tokenRetried']` against loops; guards concurrent refreshes with `_isRefreshing` + `Completer<bool>` so a burst of 401s all succeed off one refresh; calls `onTokenRefresh()`, then `getToken()`, rebuilds headers, replays. `onRefreshFailed()` fires if refresh fails.
+
+`onRequest` records a hash of the token it sent in `extra['_tokenSent']` (a hash, since `extra` is logged and handed to observers). It also records `_generation`, bumped by each successful refresh: a `401` sent under an older generation replays without refreshing — checked first, because it is synchronous. Failing that, a `401` whose sent token differs from the current one (changed outside the interceptor) replays without refreshing — it arrived after another request's refresh finished. That check awaits `getToken()`, so it must stay *before* the `_isRefreshing` test-and-set, which has to remain synchronous.
 
 `refreshTimeout` bounds the wait for the pathological case where the refresh endpoint itself 401s — that inner call is queued behind the very refresh it's part of.
 
@@ -132,17 +138,17 @@ Two things get retried, and the idempotency rule differs between them:
 
 Two hazards in `APICacheManager`, both worked around in `ApiCacheHelperImplementation`:
 
-> **`getCacheData` calls `.first` on an empty query result, so it throws `StateError` on a miss.** Catching that *is* the miss check. Do not "improve" it by guarding with `isAPICacheKeyExist` first: that returns `rows.length == 1`, so it answers false for a duplicated key exactly as it does for a missing one, turning a recoverable state into a permanent miss. `.first` handles duplicates fine.
+> **`getCacheData` calls `.first` on an empty query result, so it throws `StateError` on a miss.** Catching that *is* the miss check. Do not "improve" it by guarding with `isAPICacheKeyExist` first: that returns `rows.length == 1`, so it answers false for a duplicated key exactly as it does for a missing one, turning a recoverable state into a permanent miss. `.first` does not crash on duplicates — but it returns the **oldest** row, which is why writes clear the key first (below).
 
-> **`addCacheData` is check-then-act with no transaction** — it asks `isAPICacheKeyExist`, then inserts or updates. Two concurrent writes for one key both see "absent" and both insert, and the resulting duplicate rows are not self-correcting: `isAPICacheKeyExist` then reports the key missing forever while every further write adds another row. De-duplication makes this the *ordinary* path, since two collapsed callers each write the response. `setCacheData` therefore chains writes per key through `_pendingWrites`.
+> **`addCacheData` is check-then-act with no transaction** — it asks `isAPICacheKeyExist`, then inserts or updates. Two concurrent writes for one key both see "absent" and both insert, and the resulting duplicate rows are not self-correcting: `isAPICacheKeyExist` then reports the key missing forever while every further write adds another row. De-duplication makes this the *ordinary* path, since two collapsed callers each write the response. `setCacheData` therefore chains writes per key through `_pendingWrites`, and `_write` calls `deleteCache(key)` before `addCacheData`. Chaining stops this process creating duplicates; the delete heals ones it did not create (a second isolate, rows left by 1.x). Without it a duplicated key was frozen: every write inserted another row, every read returned the first-ever response. The delete is best-effort and must never block the write.
 
 `CachePolicy` is opt-in per request on `get`/`getAs` only — a cache policy on a `POST` is meaningless and deliberately not expressible. `networkOnly` (default) is the 1.x behaviour.
 
 > **The GET-only rule is enforced in `_effectiveCachePolicy`, not by the method signatures.** Only `get`/`getAs` take a `cachePolicy` argument, which makes the contract look self-enforcing, but `ApiConfig.defaultCachePolicy` applies to every request that does not name one — every `post`, `put`, `patch`, `delete`, `head` and `options`. Before this was enforced, a project-wide policy meant a repeated `POST /orders` was answered from the cache and never sent. Cache keys carry no method or body (see `cache_key.dart`), so all six methods on one path shared one entry and a `POST` response could be served to a later `GET`. `_effectiveCachePolicy` therefore takes the `HttpMethod` and returns `networkOnly` for anything but `GET`.
 
-`cachePolicy` is **nullable** on the public methods so "not specified" is distinguishable from "explicitly networkOnly". `_effectiveCachePolicy` resolves it: `ApiConfig.cacheEnabled: false` wins over everything, then the call site's value, then `ApiConfig.defaultCachePolicy`. The `_cache` getter is only touched when the resolved policy is not `networkOnly`, so `cacheEnabled: false` genuinely never opens SQLite.
+`cachePolicy` is **nullable** on the public methods so "not specified" is distinguishable from "explicitly networkOnly". `_effectiveCachePolicy` resolves it: `ApiConfig.cacheEnabled: false` wins over everything, then the call site's value, then `ApiConfig.defaultCachePolicy`. `responseType: bytes`/`stream` also resolve to `networkOnly`: entries are JSON, so bytes would come back as `List<dynamic>`, and the key carries no response type. `plain` responses are cached under the url key plus `|as:plain`, so a text caller and a JSON caller of one url never read each other's entry; JSON keys are unchanged so existing entries survive. The `_cache` getter is only touched when the resolved policy is not `networkOnly`, so `cacheEnabled: false` genuinely never opens SQLite.
 
-Keys come from `src/utils/cache_key.dart` and include sorted query parameters — 1.x used the raw url, so `?page=1` and `?page=2` collided. Keys are **not** hashed: a digest would have to be stable across app restarts, and `String.hashCode` isn't.
+`_cacheKeyFor` adds suffixes to the url key only when they apply — `|as:plain` for plain text, `|body:<json>` for a `GET` with a body (unencodable → not cached) — so an ordinary JSON `GET` keeps its 2.x key and existing entries stay readable. Keys come from `src/utils/cache_key.dart` and include sorted query parameters — 1.x used the raw url, so `?page=1` and `?page=2` collided. Keys are **not** hashed: a digest would have to be stable across app restarts, and `String.hashCode` isn't.
 
 Cached responses are stored as `jsonEncode(response.data)` and rebuilt into a `Response` with `extra[fromCacheKey] = true`, readable via `response.isFromCache`. Only 2xx is stored, and writes are best-effort — a body that won't encode is skipped rather than failing the request.
 
@@ -150,13 +156,15 @@ Entries are **not** scoped per user; `clearAllCache()` on logout is the document
 
 **Eviction.** `ApiConfig.cacheMaxEntries`/`cacheMaxBytes` bound the cache; both `null` (the default) leaves it unbounded and costs nothing. `cacheMaxAge` is not a bound — it discards a stale entry only when something *reads* it, so a key never requested again is never reclaimed.
 
-> `APICacheManager` exposes no way to list keys — only get, add, delete and empty — so there is nothing to sort by age. `ApiCacheHelperImplementation` therefore keeps its own index under the raw key `__baaba_cache_index__` (deliberately without the `api_cache_` prefix, so no real key can collide with it), mapping key to `[writtenAtMillis, byteLength]`. Index mutations are serialised through `_indexLock`: the per-key `_pendingWrites` chaining does not cover it, because writes for *different* keys run concurrently and all touch that one row. Eviction is oldest-by-write, never oldest-by-read — tracking reads would mean a disk write on every cache hit. The entry the current write just stored is never evicted, so a cap of 0 or 1 still stores it. `clearCache` must drop the key from the index or its bytes keep counting against the cap; `clearAllCache` resets the in-memory copy, since `emptyCache()` takes the index row with everything else.
+> `APICacheManager` exposes no way to list keys — only get, add, delete and empty — so there is nothing to sort by age. `ApiCacheHelperImplementation` therefore keeps its own index under the raw key `__baaba_cache_index__` (deliberately without the `api_cache_` prefix, so no real key can collide with it), mapping key to `[writtenAtMillis, byteLength]`. Index mutations are serialised through `_indexLock`: the per-key `_pendingWrites` chaining does not cover it, because writes for *different* keys run concurrently and all touch that one row. Eviction is oldest-by-write, never oldest-by-read — tracking reads would mean a disk write on every cache hit. The entry the current write just stored is never evicted, so a cap of 0 or 1 still stores it. A `maxAge` expiry runs its delete through `_serially` (the same per-key queue as writes) and only if the stored row's `syncTime` still matches the one judged stale — run directly, it could delete a write that landed after the stale read. Every deletion — `clearCache` and a `maxAge` expiry alike — goes through `_delete`, which drops the key from the index even when the index has not been loaded yet (it persists, so a skipped update resurfaces on the next load), or its bytes keep counting against the cap. Sizes are UTF-8 bytes, not `String.length`; `clearAllCache` resets the in-memory copy, since `emptyCache()` takes the index row with everything else.
 
 ### De-duplication
 
 `_inFlight: Map<String, Future<...>>` on `ApiServicesImplementation`, keyed by method + canonical url + body. Only the originator stores and removes the entry; followers just await it.
 
-Skipped when the caller supplies a `CancelToken` — sharing one network call would let either caller cancel the other's request. GET-only, opt out with `dedupe: false`.
+Skipped when the caller supplies a `CancelToken` — sharing one network call would let either caller cancel the other's request — and when it passes a progress callback, since only the originator's callbacks reach Dio. GET-only, opt out with `dedupe: false`.
+
+> The key (`buildRequestKey`) must cover everything that changes the answer: headers (lowercased names) and `responseType` as well as url and body. Bodies are `jsonEncode`d, never `toString()`ed — a model without its own `toString` prints as `Instance of 'X'`, which made every instance the same request. An unencodable body returns a `null` key, meaning "do not collapse".
 
 ### Observer
 
@@ -168,21 +176,21 @@ Inner layers therefore return failures without reporting them; they attach `Fail
 
 A `*As<T>` parse failure fires **both** `onResponse` (the HTTP call succeeded) and `onFailure` (the body could not be understood). Two real events; `_parse` runs per caller so it needs no special handling.
 
-Every observer callback is wrapped in try/catch — a broken observer must never break a request.
+Every observer callback is wrapped in try/catch — a broken observer must never break a request. The same goes for the loader callbacks (`_callLoader`) and `AuthConfig.onRefreshFailed`: all three are typically navigation code (`navigatorKey.currentContext!`, `pop()`), which throws readily.
 
 ### Request cancellation
 
-`_activeTokens: Map<CancelToken, String?>` tracks every active token against the `tag` its request was made under. `cancelRequest()` cancels all of them; `cancelRequest(tag: ...)` cancels only that tag's. Tokens are removed in the `finally` of `_performRequest`/`download`.
+`_activeTokens: Map<CancelToken, List<String?>>` tracks every active token against the tags of the requests using it — a list, one entry per request, because a caller may share one token across several and the first to finish must not unregister it for the rest. `_tracked` registers it for the request's **whole** life, connectivity probe and queue included; registered later, a cancel during the probe was missed and the request went out. `reset()` calls `_close()`, which cancels everything and makes `_tracked` cancel anything that arrives later. `cancelRequest()` cancels all of them; `cancelRequest(tag: ...)` cancels only that tag's. Tokens are removed in `_tracked`'s `finally`.
 
 A `tag` opts the request out of de-duplication for the same reason a caller-supplied `CancelToken` does: `cancelRequest(tag:)` would otherwise abort a collapsed request that a caller under a different tag — or none — is still awaiting. `canDedupe = dedupe && cancelToken == null && tag == null`.
 
 ### Loading indicator
 
-`ApiServices.configureLoader({onShow, onHide})`. Reference-counted via `ApiServices._activeLoadingCount` so concurrent requests share one indicator. The counter is **static**, matching the scope of the callbacks it drives — the indicator is one global widget, and a second `init()` while requests are in flight would otherwise start a fresh per-instance count against a dialog the previous client is still driving. `reset()` clears it. `_sendRequest` wraps its whole body in try/finally, so the loader hides on success, `Failure`, and thrown exceptions alike. `upload()` holds the loader across file reads *and* the request, passing `showLoader: false` down to `_sendRequest` to avoid double-counting.
+`ApiServices.configureLoader({onShow, onHide})`. Reference-counted via `ApiServices._activeLoadingCount` so concurrent requests share one indicator. The counter is **static**, matching the scope of the callbacks it drives — the indicator is one global widget, and a second `init()` while requests are in flight would otherwise start a fresh per-instance count against a dialog the previous client is still driving. `reset()` clears it and bumps `_loaderEpoch`; `_showLoader` returns the epoch and `_hideLoader(epoch)` ignores a stale one, or a request in flight across a `reset()` would drive the count negative and the loader would never show again. `_sendRequest` wraps its whole body in try/finally, so the loader hides on success, `Failure`, and thrown exceptions alike. `upload()` holds the loader across file reads *and* the request, passing `showLoader: false` down to `_sendRequest` to avoid double-counting.
 
 ### Uploads
 
-`upload()` builds `FormData` from `fields` + `List<UploadFile>`. `UploadFile.fromPath` for mobile/desktop, `fromBytes` for web.
+`upload()` builds `FormData` from `fields`, then appends each `UploadFile` to `formData.files` — never via the map, where several files sharing a field would be duplicate keys and all but the last dropped. `UploadFile.fromPath` for mobile/desktop, `fromBytes` for web.
 
 > `_headersFor` strips a JSON `content-type` when the body is `FormData` — from caller-supplied headers too, not just the default set. Sending it would replace the `multipart/form-data` type Dio generates, boundary included, and the server would reject the upload. An explicit `multipart/*` value is left alone.
 
@@ -202,7 +210,7 @@ A `tag` opts the request out of de-duplication for the same reason a caller-supp
 - `mocktail` for all mocks. Mocks created in `setUpAll` are shared across a group; `reset(mock)` in `setUp` if you need `verifyNever`.
 - Two established patterns: **`MockDio` + `MockNetworkInfo`** for service-level tests, and a **fake `HttpClientAdapter`** for interceptor-level tests that drive real Dio end-to-end. Don't invent a third.
 - `ApiServices.reset()` in `tearDown` for anything touching static config.
-- Network-level tests mock `Dio` directly; don't mock `ApiServices` itself — use `FakeApiServices` from `lib/testing.dart`. Anything added to the `ApiServices` interface has to land in `FakeApiServices` too, or consumers' test suites stop compiling.
+- Network-level tests mock `Dio` directly; don't mock `ApiServices` itself — use `FakeApiServices` from `lib/testing.dart`. The fake must *behave* like production, not just compile against it: it builds failures with `failureForStatus` (`error_handler.dart`) and applies `isSuccess` with `evaluateSuccess` (`success_check.dart`) — the same functions the real client uses. Add to those rather than re-implementing logic in the fake. Anything added to the `ApiServices` interface has to land in `FakeApiServices` too, or consumers' test suites stop compiling.
 - Cache eviction tests use a stateful fake `APICacheManager` rather than sqflite, and must space writes apart (`syncTime` has millisecond resolution, so same-tick entries cannot be ordered).
 
 #### Local environment note

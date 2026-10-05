@@ -321,6 +321,89 @@ void main() {
       expect(post, isNot(postB));
     });
   });
+
+  test('a plain-text caller is not served a JSON caller\'s entry', () async {
+    stubNetwork(body: 'line one');
+    cache.entries['/report'] = jsonEncode({'decoded': true});
+
+    final result = await api.get(
+      endpoint: '/report',
+      responseType: ResponseType.plain,
+      cachePolicy: CachePolicy.cacheFirst,
+    );
+
+    expect(networkCalls, 1);
+    result.fold((f) => fail('$f'), (r) => expect(r.data, 'line one'));
+
+    // And it is cached for the next plain-text caller, under its own key.
+    final again = await api.get(
+      endpoint: '/report',
+      responseType: ResponseType.plain,
+      cachePolicy: CachePolicy.cacheFirst,
+    );
+    expect(networkCalls, 1);
+    again.fold((f) => fail('$f'), (r) {
+      expect(r.isFromCache, isTrue);
+      expect(r.data, 'line one');
+    });
+    expect(cache.entries['/report'], jsonEncode({'decoded': true}),
+        reason: 'the JSON entry is untouched');
+  });
+
+  test('GETs with different bodies do not share a cache entry', () async {
+    stubNetwork(body: {'results': 'any'});
+
+    await api.get(
+      endpoint: '/search',
+      data: {'q': 'a'},
+      cachePolicy: CachePolicy.cacheFirst,
+    );
+    await api.get(
+      endpoint: '/search',
+      data: {'q': 'b'},
+      cachePolicy: CachePolicy.cacheFirst,
+    );
+
+    expect(networkCalls, 2,
+        reason: "the second search must not be answered with the first's");
+    expect(cache.entries, hasLength(2));
+  });
+
+  test('a GET body that cannot be encoded is not cached', () async {
+    stubNetwork(body: {'results': 'any'});
+
+    await api.get(
+      endpoint: '/search',
+      data: Object(),
+      cachePolicy: CachePolicy.cacheFirst,
+    );
+
+    expect(cache.entries, isEmpty);
+    expect(cache.reads, isEmpty);
+  });
+
+  group('binary responses are never cached', () {
+    for (final type in [ResponseType.bytes, ResponseType.stream]) {
+      test('${type.name} goes to the network even under cacheFirst', () async {
+        stubNetwork(body: [1, 2, 3]);
+        // A JSON caller has cached this url already.
+        cache.entries['/avatar'] = jsonEncode({'not': 'bytes'});
+
+        final result = await api.get(
+          endpoint: '/avatar',
+          responseType: type,
+          cachePolicy: CachePolicy.cacheFirst,
+        );
+
+        expect(networkCalls, 1,
+            reason: 'serving the cached map would hand a bytes caller a Map');
+        result.fold((f) => fail('$f'), (r) => expect(r.isFromCache, isFalse));
+        expect(cache.reads, isEmpty);
+        expect(cache.entries['/avatar'], jsonEncode({'not': 'bytes'}),
+            reason: 'a bytes body stored as JSON comes back as List<dynamic>');
+      });
+    }
+  });
 }
 
 /// A project-wide `defaultCachePolicy` must not leak onto methods that never

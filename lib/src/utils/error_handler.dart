@@ -52,12 +52,21 @@ Failure _handleBadResponse(DioException error) {
     );
   }
 
+  return failureForStatus(statusCode, responseData);
+}
+
+/// The `Failure` for an HTTP error response with [statusCode] and [body].
+///
+/// Shared with `FakeApiServices`, so a stubbed failure is built exactly as a
+/// real one is — a test double that disagreed would let consumer tests pass
+/// against behaviour production does not have.
+Failure failureForStatus(int statusCode, Object? body) {
   final responseCode = mapStatusCodeToEnum(statusCode);
   final errorSource = mapResponseCodeToEnum(responseCode);
 
   // Prefer what the server said; fall back to the generic text for the status
   // rather than handing the caller an empty string.
-  final serverMessage = extractErrorMessage(responseData);
+  final serverMessage = extractErrorMessage(body);
   final message = serverMessage.isNotEmpty
       ? serverMessage
       : errorSource.getFailure().message;
@@ -66,7 +75,7 @@ Failure _handleBadResponse(DioException error) {
     errorSource,
     responseCode,
     message,
-    data: responseData,
+    data: body,
     statusCode: statusCode,
   );
 }

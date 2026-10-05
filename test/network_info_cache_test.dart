@@ -30,6 +30,19 @@ void main() {
       return false;
     }
 
+    test('a clock set backwards does not stretch the cached result', () async {
+      final info = build(probe: online);
+      expect(await info.isConnected, isTrue);
+
+      // The user corrects the device clock by an hour. The difference goes
+      // negative — "less than the TTL" — and the stale "connected" would
+      // otherwise last until the clock caught up again.
+      now = now.subtract(const Duration(hours: 1));
+      expect(await info.isConnected, isTrue);
+
+      expect(probeCount, 2);
+    });
+
     test('probes once and reuses the result inside the TTL window', () async {
       final info = build(probe: online);
 

@@ -123,7 +123,13 @@ class NetworkRetryInterceptor extends Interceptor {
 
     final seconds = int.tryParse(raw);
     if (seconds != null) {
-      return seconds <= 0 ? Duration.zero : Duration(seconds: seconds);
+      if (seconds <= 0) return Duration.zero;
+      // Clamped before a Duration is built from it: an absurd value overflows
+      // Duration's microsecond count and wraps negative, which then slipped
+      // under the maxDelay clamp and retried immediately.
+      return seconds >= policy.maxDelay.inSeconds
+          ? policy.maxDelay
+          : Duration(seconds: seconds);
     }
 
     try {

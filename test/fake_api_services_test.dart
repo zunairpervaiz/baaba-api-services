@@ -174,4 +174,49 @@ void main() {
     expect(api.recordedCalls, isEmpty);
     await expectLater(api.get(endpoint: '/users'), throwsStateError);
   });
+
+  group('builds failures the way production does', () {
+    tearDown(ApiServices.reset);
+
+    test('stubFailure maps the status and reads the body\'s message', () async {
+      api.stubFailure(
+        HttpMethod.get,
+        '/me',
+        statusCode: 401,
+        body: {'message': 'Session expired'},
+      );
+
+      final failure = (await api.get(endpoint: '/me')).getLeft().toNullable()!;
+
+      // It used to be badRequest / 400 / the generic text, whatever the
+      // status — so code branching on unauthorized could not be tested.
+      expect(failure.errorType, ErrorSource.unauthorized);
+      expect(failure.code, ResponseCode.unauthorized);
+      expect(failure.message, 'Session expired');
+      expect(failure.statusCode, 401);
+    });
+
+    test('stubJson with a non-2xx status is a failure, as Dio makes it',
+        () async {
+      api.stubJson(HttpMethod.get, '/missing', {'detail': 'No such user'},
+          statusCode: 404);
+
+      final failure =
+          (await api.get(endpoint: '/missing')).getLeft().toNullable()!;
+      expect(failure.errorType, ErrorSource.notFound);
+      expect(failure.message, 'No such user');
+    });
+
+    test('ApiConfig.isSuccess applies to stubbed responses', () async {
+      ApiServices.init(ApiConfig(
+        isSuccess: (r) => r.data is! Map || r.data['success'] != false,
+      ));
+      api.stubJson(HttpMethod.post, '/pay',
+          {'success': false, 'message': 'Insufficient funds'});
+
+      final failure =
+          (await api.post(endpoint: '/pay')).getLeft().toNullable()!;
+      expect(failure.message, 'Insufficient funds');
+    });
+  });
 }

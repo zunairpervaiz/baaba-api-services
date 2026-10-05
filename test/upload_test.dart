@@ -259,4 +259,22 @@ void main() {
     expect(shows, 1);
     expect(hides, 1);
   });
+
+  test('several files under one field are all sent', () async {
+    // `images[]`-style multi-file fields. Built as a map literal, the
+    // duplicate keys collapsed and only the last file went out.
+    await api.upload(
+      endpoint: '/gallery',
+      files: [
+        UploadFile.fromBytes(field: 'images', bytes: [1], filename: 'a.png'),
+        UploadFile.fromBytes(field: 'images', bytes: [2], filename: 'b.png'),
+        UploadFile.fromBytes(field: 'cover', bytes: [3], filename: 'c.png'),
+      ],
+    );
+
+    expect(
+      sentFormData().files.map((e) => '${e.key}:${e.value.filename}'),
+      ['images:a.png', 'images:b.png', 'cover:c.png'],
+    );
+  });
 }

@@ -15,6 +15,8 @@
 /// dependency), and SQLite handles long `TEXT` keys without complaint.
 library;
 
+import 'dart:convert';
+
 /// Joins [baseUrl] and [endpoint], leaving an already-absolute [endpoint]
 /// alone so a call to a CDN or third-party host keys correctly.
 String canonicalUrl(String? baseUrl, String endpoint) {
@@ -72,22 +74,48 @@ String buildCacheKey({
   return query.isEmpty ? url : '$url?$query';
 }
 
-/// Key identifying an in-flight request, for de-duplication.
+/// Key identifying an in-flight request, for de-duplication, or `null` when
+/// the request cannot be keyed safely and so must not be collapsed.
 ///
-/// Includes the method and body so that two calls differing only in payload
-/// are never collapsed into one.
-String buildRequestKey({
+/// Everything that changes what comes back is part of the key: the method and
+/// body, so two calls differing only in payload stay apart; the [headers], so
+/// an `Accept-Language: ur` caller is not handed the English response; and the
+/// [responseType], so a caller asking for bytes is not handed a decoded map.
+///
+/// The body is JSON-encoded rather than `toString()`ed: a model without its
+/// own `toString` prints as `Instance of 'User'`, which would make every user
+/// the same request. A body that will not encode returns `null`.
+String? buildRequestKey({
   required String method,
   String? baseUrl,
   required String endpoint,
   Map<String, dynamic>? params,
   Object? data,
+  Map<String, String>? headers,
+  String? responseType,
 }) {
+  final String body;
+  try {
+    body = data == null ? '' : '|${jsonEncode(data)}';
+  } catch (_) {
+    return null;
+  }
+
   final base = buildCacheKey(
     baseUrl: baseUrl,
     endpoint: endpoint,
     params: params,
   );
-  final body = data == null ? '' : '|$data';
-  return '$method $base$body';
+  final type = responseType == null ? '' : '|as:$responseType';
+  return '$method $base$type${_canonicalHeaders(headers)}$body';
+}
+
+/// Header names are case-insensitive, so they are lowercased before sorting.
+String _canonicalHeaders(Map<String, String>? headers) {
+  if (headers == null || headers.isEmpty) return '';
+  final pairs = [
+    for (final MapEntry(:key, :value) in headers.entries)
+      '${key.toLowerCase()}:$value',
+  ]..sort();
+  return '|h:${pairs.join(',')}';
 }

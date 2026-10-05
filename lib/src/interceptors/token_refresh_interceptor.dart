@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:baaba_api_handler/src/config/auth_config.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
+import 'package:baaba_api_handler/src/utils/refresh_zone.dart';
 import 'package:baaba_api_handler/src/utils/replayable_request.dart';
 import 'package:dio/dio.dart';
 
@@ -78,6 +79,11 @@ class TokenRefreshInterceptor extends Interceptor {
   final Dio _dio;
 
   bool _isRefreshing = false;
+
+  /// Bumped by every successful refresh. Each request records the value it
+  /// was sent under, so a `401` can tell — synchronously — that a refresh has
+  /// already happened since.
+  int _generation = 0;
   Completer<bool>? _refreshCompleter;
 
   TokenRefreshInterceptor({
@@ -157,6 +163,13 @@ class TokenRefreshInterceptor extends Interceptor {
     if (token != null) {
       options.headers.addAll(_buildHeaders(token));
     }
+    // Remembered so a 401 can tell whether it is about the current token or
+    // one that has been replaced since. Updated on every attempt, since a
+    // retry or replay passes back through here. A hash, not the token: extra
+    // is printed by the logger and handed to observers, and only equality is
+    // needed. A collision just means refreshing, as before.
+    options.extra[_sentTokenKey] = token?.hashCode;
+    options.extra[_generationKey] = _generation;
     handler.next(options);
   }
 
@@ -173,6 +186,32 @@ class TokenRefreshInterceptor extends Interceptor {
         !_shouldAttach(err.requestOptions) ||
         _isAlreadyRetried(err.requestOptions)) {
       return handler.next(err);
+    }
+
+    // A 401 that arrives after another request's refresh has already
+    // finished — sent with the old token, answered late. The token it
+    // complains about is gone, so replay with the current one instead of
+    // refreshing again: against a backend that rotates refresh tokens, a
+    // redundant refresh can fail outright and sign the user out.
+    //
+    // The generation check comes first because it is synchronous: nothing
+    // can slip in between reading it and acting on it.
+    final sentUnder = err.requestOptions.extra[_generationKey];
+    if (sentUnder is int && sentUnder != _generation) {
+      return _retryRequest(err, handler);
+    }
+
+    // The token check covers a token replaced outside this interceptor — a
+    // proactive refresh, a fresh login. It must stay before _isRefreshing,
+    // never after: getToken() is awaited, and the test-and-set of
+    // _isRefreshing below must stay synchronous or two 401s could both pass
+    // it and refresh twice.
+    final sentWith = err.requestOptions.extra[_sentTokenKey];
+    if (sentWith != null && !_isRefreshing) {
+      final current = await _currentToken();
+      if (current != null && current.hashCode != sentWith) {
+        return _retryRequest(err, handler);
+      }
     }
 
     // A refresh triggered by another request is already in flight — wait for
@@ -192,54 +231,98 @@ class TokenRefreshInterceptor extends Interceptor {
     }
 
     _isRefreshing = true;
-    _refreshCompleter = Completer<bool>();
+    final completer = _refreshCompleter = Completer<bool>();
 
     try {
-      final refreshed = await onTokenRefresh();
-      _refreshCompleter!.complete(refreshed);
+      // Only the refresh itself may count as a failed refresh. A replay that
+      // threw after a *successful* one used to land in a catch around both,
+      // which completed the completer a second time — so the request failed
+      // with "Future already completed" in place of the real error — and
+      // which would then have fired onRefreshFailed, signing out a user
+      // whose session had just been renewed.
+      final refreshed = await _refresh();
+      if (refreshed) _generation++;
+      completer.complete(refreshed);
 
-      if (refreshed) {
-        // Awaited, not just returned. `finally` below clears _isRefreshing,
-        // and an un-awaited return runs it while the replay is still in
-        // flight — so a second 401 arriving in that window would see no
-        // refresh in progress and start a redundant one, which is the
-        // stampede this interceptor exists to prevent.
-        return await _retryRequest(err, handler);
-      } else {
-        onRefreshFailed?.call();
+      if (!refreshed) {
+        // Guarded: it is usually logout navigation, which can throw, and the
+        // caller must still see the 401 rather than that exception — code
+        // checking `errorType == ErrorSource.unauthorized` depends on it.
+        try {
+          onRefreshFailed?.call();
+        } catch (_) {}
         return handler.next(err);
       }
-    } catch (_) {
-      _refreshCompleter!.complete(false);
-      onRefreshFailed?.call();
-      return handler.next(err);
+
+      // Awaited, not just returned. `finally` below clears _isRefreshing,
+      // and an un-awaited return runs it while the replay is still in
+      // flight — so a second 401 arriving in that window would see no
+      // refresh in progress and start a redundant one, which is the
+      // stampede this interceptor exists to prevent.
+      return await _retryRequest(err, handler);
     } finally {
       _isRefreshing = false;
       _refreshCompleter = null;
     }
   }
 
+  /// The token as it stands now, or `null` if it cannot be read — in which
+  /// case the 401 is handled by refreshing, as it always was.
+  Future<String?> _currentToken() async {
+    try {
+      return await getToken();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Runs [onTokenRefresh], treating a throw as a failed refresh.
+  ///
+  /// A plain try/catch rather than `.catchError((_) => false)`: an
+  /// `() async => throw ...` callback has the runtime type `Future<Never>`,
+  /// and `catchError` on that rejects a `false` with a `TypeError`.
+  Future<bool> _refresh() async {
+    try {
+      // Marked, so a refresh request made through the same client is not
+      // queued behind the requests waiting on it. See refresh_zone.dart.
+      return await runAsTokenRefresh(onTokenRefresh);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Replays the request with the fresh token. Never throws: whatever goes
+  /// wrong, the original request still gets an answer through [handler].
   Future<void> _retryRequest(
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
-    final freshToken = await getToken();
-    if (freshToken != null) {
-      err.requestOptions.headers.addAll(_buildHeaders(freshToken));
-    }
-    err.requestOptions.extra['_tokenRetried'] = true;
-
-    // An upload big enough to outlive its token has already had its multipart
-    // body consumed by the attempt that 401'd.
-    prepareForReplay(err.requestOptions);
-
     try {
+      final freshToken = await getToken();
+      if (freshToken != null) {
+        err.requestOptions.headers.addAll(_buildHeaders(freshToken));
+      }
+      err.requestOptions.extra['_tokenRetried'] = true;
+
+      // An upload big enough to outlive its token has already had its
+      // multipart body consumed by the attempt that 401'd.
+      prepareForReplay(err.requestOptions);
+
       final response = await _dio.fetch(err.requestOptions);
       return handler.resolve(response);
     } on DioException catch (e) {
       return handler.next(e);
+    } catch (e, stackTrace) {
+      return handler.next(DioException(
+        requestOptions: err.requestOptions,
+        error: e,
+        stackTrace: stackTrace,
+      ));
     }
   }
+
+  static const String _sentTokenKey = '_tokenSent';
+  static const String _generationKey = '_tokenGeneration';
 
   bool _isAlreadyRetried(RequestOptions options) {
     return options.extra['_tokenRetried'] == true;

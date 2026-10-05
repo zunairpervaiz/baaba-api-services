@@ -136,7 +136,21 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
     if (maxAge != null && cached.syncTime != null) {
       final cachedAt = DateTime.fromMillisecondsSinceEpoch(cached.syncTime!);
       if (DateTime.now().difference(cachedAt) > maxAge) {
-        await _apiCacheManager.deleteCache(cacheKey);
+        // Through the per-key chain, and only if the stored row is still the
+        // one judged stale. Run directly, the delete could land after a write
+        // that started — or even finished — once the stale row was read, and
+        // take the fresh entry with it.
+        final staleAt = cached.syncTime;
+        await _serially(cacheKey, () async {
+          final APICacheDBModel current;
+          try {
+            current = await _apiCacheManager.getCacheData(cacheKey);
+          } catch (_) {
+            return false; // Already gone.
+          }
+          if (current.syncTime != staleAt) return false; // Rewritten since.
+          return _delete(cacheKey);
+        });
         return null;
       }
     }
@@ -187,17 +201,22 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
     // race: two callers collapsed onto one network call each write the
     // response afterwards. Chaining writes per key keeps the check and the act
     // together.
-    Future<bool> run() => _write(cacheKey, data, maxEntries, maxBytes);
+    return _serially(
+        cacheKey, () => _write(cacheKey, data, maxEntries, maxBytes));
+  }
 
+  /// Runs [action] after any work already queued for [cacheKey], so
+  /// operations on one key never interleave.
+  Future<bool> _serially(String cacheKey, Future<bool> Function() action) {
     final previous = _pendingWrites[cacheKey];
-    final write = previous == null
-        ? run()
-        : previous.then((_) => run(), onError: (_) => run());
+    final next = previous == null
+        ? action()
+        : previous.then((_) => action(), onError: (_) => action());
 
-    _pendingWrites[cacheKey] = write;
-    return write.whenComplete(() {
-      // Only clear if no later write has taken the slot.
-      if (identical(_pendingWrites[cacheKey], write)) {
+    _pendingWrites[cacheKey] = next;
+    return next.whenComplete(() {
+      // Only clear if no later operation has taken the slot.
+      if (identical(_pendingWrites[cacheKey], next)) {
         _pendingWrites.remove(cacheKey);
       }
     });
@@ -209,12 +228,30 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
     int? maxEntries,
     int? maxBytes,
   ) async {
+    // Clear the key first, so the write below always lands as a single row.
+    //
+    // Duplicate rows are not self-correcting, and reading through them is not
+    // "fine": with two rows, addCacheData's existence check (`length == 1`)
+    // answers false and inserts a *third*, while getCacheData's `.first`
+    // returns the oldest. The cache then serves its first-ever response for
+    // that key forever. Per-key chaining stops this process creating them,
+    // but not a second isolate, nor rows left over from 1.x. deleteCache
+    // removes every row for the key, so one write heals it.
+    //
+    // Best-effort: a delete that fails must not stop the write.
+    try {
+      await _apiCacheManager.deleteCache(cacheKey);
+    } catch (_) {}
+
     final saved = await _apiCacheManager
         .addCacheData(APICacheDBModel(key: cacheKey, syncData: data));
 
     if (saved && (maxEntries != null || maxBytes != null)) {
-      await _guardIndex(
-          () => _record(cacheKey, data.length, maxEntries, maxBytes));
+      // Bytes as stored, not UTF-16 code units: `data.length` undercounts
+      // anything outside ASCII — up to threefold for Urdu or Arabic text — and
+      // the cap is documented in bytes.
+      await _guardIndex(() =>
+          _record(cacheKey, utf8.encode(data).length, maxEntries, maxBytes));
     }
     return saved;
   }
@@ -241,16 +278,21 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
       final index = await _loadIndex();
       index[key] = [DateTime.now().millisecondsSinceEpoch, bytes];
 
-      final oldestFirst = index.keys.toList()
-        ..sort((a, b) => index[a]![0].compareTo(index[b]![0]));
-
       var count = index.length;
       var total = index.values.fold<int>(0, (sum, e) => sum + e[1]);
 
+      bool overBounds() =>
+          (maxEntries != null && count > maxEntries) ||
+          (maxBytes != null && total > maxBytes);
+
+      // The usual write fits, and needs no sort.
+      if (!overBounds()) return await _saveIndex(index);
+
+      final oldestFirst = index.keys.toList()
+        ..sort((a, b) => index[a]![0].compareTo(index[b]![0]));
+
       for (final candidate in oldestFirst) {
-        final overCount = maxEntries != null && count > maxEntries;
-        final overBytes = maxBytes != null && total > maxBytes;
-        if (!overCount && !overBytes) break;
+        if (!overBounds()) break;
 
         // Never evict the entry this write just stored — a cap of zero or one
         // would otherwise throw away the response we were asked to cache.
@@ -305,19 +347,25 @@ class ApiCacheHelperImplementation implements ApiCacheHelper {
 
   @override
   Future<bool> clearCache(String url) async {
-    var cacheKey = _cacheKeyPrefix + url;
-    // Deletes cached data corresponding to the constructed cache key asynchronously and returns the operation's success status.
-    final deleted = await _apiCacheManager.deleteCache(cacheKey);
+    return _delete(_cacheKeyPrefix + url);
+  }
 
-    // Drop it from the index too, or its bytes keep counting against the cap
-    // and eviction starts discarding live entries to make room for a row that
-    // no longer exists.
-    if (_index != null) {
-      await _guardIndex(() async {
+  /// Deletes one entry and drops it from the index.
+  ///
+  /// The index has to follow, or the entry's bytes keep counting against the
+  /// cap and eviction starts discarding live entries to make room for a row
+  /// that no longer exists. That holds even when the index has not been
+  /// loaded this session: it persists, so a key deleted before the first
+  /// bounded write would otherwise reappear in it once that write loads it.
+  /// An unbounded cache has no index row, so this costs it one empty read.
+  Future<bool> _delete(String cacheKey) async {
+    final deleted = await _apiCacheManager.deleteCache(cacheKey);
+    await _guardIndex(() async {
+      try {
         final index = await _loadIndex();
         if (index.remove(cacheKey) != null) await _saveIndex(index);
-      });
-    }
+      } catch (_) {}
+    });
     return deleted;
   }
 

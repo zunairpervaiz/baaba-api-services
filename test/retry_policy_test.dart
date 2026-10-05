@@ -188,6 +188,24 @@ void main() {
       expect(adapter.callCount, 2);
     });
 
+    test('an absurdly large value waits maxDelay, not zero', () async {
+      // 10^13 seconds overflows Duration's microsecond count and wraps
+      // negative, which slipped under the maxDelay clamp: retry at once.
+      final adapter =
+          _ScriptedAdapter([503], headers: {'retry-after': '10000000000000'});
+      final dio = _dioWith(
+        const RetryPolicy(maxDelay: Duration(milliseconds: 300)),
+        adapter,
+      );
+
+      final stopwatch = Stopwatch()..start();
+      await dio.get('/users');
+      stopwatch.stop();
+
+      expect(stopwatch.elapsedMilliseconds, greaterThanOrEqualTo(250));
+      expect(adapter.callCount, 2);
+    });
+
     test('ignores an unparseable header and falls back to backoff', () async {
       final adapter =
           _ScriptedAdapter([503], headers: {'retry-after': 'soon-ish'});
