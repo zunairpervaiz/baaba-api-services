@@ -58,11 +58,11 @@ class UploadFile {
     String? filename,
     String? contentType,
   }) : this._(
-          field: field,
-          path: path,
-          filename: filename,
-          contentType: contentType,
-        );
+         field: field,
+         path: path,
+         filename: filename,
+         contentType: contentType,
+       );
 
   /// A file already in memory. Works on every platform, including web.
   const UploadFile.fromBytes({
@@ -71,11 +71,11 @@ class UploadFile {
     required String filename,
     String? contentType,
   }) : this._(
-          field: field,
-          bytes: bytes,
-          filename: filename,
-          contentType: contentType,
-        );
+         field: field,
+         bytes: bytes,
+         filename: filename,
+         contentType: contentType,
+       );
 
   DioMediaType? get _mediaType {
     final type = contentType;

@@ -1,3 +1,57 @@
+# Migrating to 4.0.0
+
+4.0.0 requires Dart 3.8 / Flutter 3.32, and removes response caching along with the `api_cache_manager` dependency (and transitively `sqflite`). Every request now goes to the network. Apps already on Flutter 3.32+ that never passed a `cachePolicy` only need to delete any leftover cache configuration and, if they switch exhaustively over `ErrorSource` or `ResponseCode`, add a case for the new `gatewayTimeout`. 4.0.0 also stops applying `isSuccess` to `head()`.
+
+## 0. Flutter 3.32 / Dart 3.8 or newer
+
+If `flutter pub get` reports that `baaba_api_handler` 4.x requires a newer SDK, upgrade Flutter (`flutter upgrade`) or stay on 3.x until you can.
+
+## 1. Remove cache arguments and configuration
+
+These no longer exist, and each is a compile error:
+
+| Removed | Fix |
+|---|---|
+| `cachePolicy:` / `cacheMaxAge:` on `get`/`getAs` | Delete the argument. |
+| `ApiConfig(cacheEnabled:, defaultCachePolicy:, cacheMaxEntries:, cacheMaxBytes:)` | Delete the field, and the same names on `copyWith`. |
+| `CachePolicy` | Delete every use, along with the arguments above. |
+| `response.isFromCache` (the `CachedResponse` extension) | Every response is from the network now; delete the branch. |
+| `ApiCacheHelper` | Store the data yourself — `shared_preferences`, Hive, `sqflite` directly, or `api_cache_manager` added as your own dependency. |
+| `APICacheDBModel` re-export | Import it from `api_cache_manager` directly if you still use it. |
+
+```dart
+// Before
+final result = await api.get(
+  endpoint: '/products',
+  cachePolicy: CachePolicy.networkFirst,
+);
+
+// After
+final result = await api.get(endpoint: '/products');
+```
+
+If you relied on `networkFirst` for offline tolerance, keep the last good response in your repository layer and fall back to it on `Left`.
+
+## 2. Exhaustive switches over `ErrorSource` or `ResponseCode`
+
+`ErrorSource.cacheError` and `ResponseCode.cacheError` are gone, so a `case` naming them no longer compiles — delete it. The integer `-5` is retired rather than reused; `mapStatusCodeToEnum(-5)` now returns `ResponseCode.defaultError`, and every other code keeps its value.
+
+`ErrorSource.gatewayTimeout` and `ResponseCode.gatewayTimeout` (`504`) are new, so an exhaustive switch needs a case for them. A `504` used to arrive as `defaultError` with "An unexpected error occurred"; code that recognised a gateway timeout by checking `failure.statusCode == 504` keeps working, but can now match the error type instead.
+
+## 3. `isSuccess` no longer runs on `head()`
+
+A `HEAD` response has no body, so a body-reading predicate — `r.data['success'] == true` — threw on every `head()` call, and a throw counts as a rejection. `head()` now skips `isSuccess`, as `download()` always has. If you relied on `isSuccess` to reject a `HEAD` based on its headers, check them at the call site instead.
+
+## 4. Logout
+
+`ApiCacheHelper.instance.clearAllCache()` on logout is no longer needed — the package persists nothing. Keep calling `ApiServices.reset()`.
+
+## 5. Leftover database
+
+Apps upgrading from 3.x keep the SQLite file `api_cache_manager` created. It is harmless but no longer read; delete it if disk space matters, or call `APICacheManager().emptyCache()` once before dropping the dependency.
+
+---
+
 # Migrating to 3.0.0
 
 Most apps only need to raise their `equatable` constraint. The other changes affect specific code patterns, and each is a compile error with a mechanical fix.
@@ -167,6 +221,8 @@ result.fold(
 ```
 
 ### Offline tolerance
+
+> Response caching was removed in 4.0.0. This section applies to 2.x and 3.x only.
 
 ```dart
 final result = await api.get(

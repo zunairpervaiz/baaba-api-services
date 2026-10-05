@@ -2,9 +2,6 @@
 #
 # A .pubignore replaces .gitignore entirely for publishing, so everything that
 # should stay out of the archive has to be listed here — not just the extras.
-#
-# The build artifacts below are currently tracked in git (they predate this
-# file), which is why pub would otherwise bundle them despite .gitignore.
 
 # Dart / Flutter build artifacts
 .dart_tool/

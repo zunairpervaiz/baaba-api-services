@@ -29,19 +29,24 @@ class _RecordingAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-ResponseBody _json(String body, [int status = 200]) =>
-    ResponseBody.fromString(body, status, headers: {
-      Headers.contentTypeHeader: [Headers.jsonContentType],
-    });
+ResponseBody _json(String body, [int status = 200]) => ResponseBody.fromString(
+  body,
+  status,
+  headers: {
+    Headers.contentTypeHeader: [Headers.jsonContentType],
+  },
+);
 
 void _init(HttpClientAdapter adapter, {ApiConfig? config}) {
-  ApiServices.init((config ?? const ApiConfig()).copyWith(
-    baseUrl: 'https://api.test',
-    bypassConnectivityCheck: true,
-    retry: const RetryPolicy.disabled(),
-    logging: const ApiLogOptions(enabled: false),
-    httpClientAdapter: adapter,
-  ));
+  ApiServices.init(
+    (config ?? const ApiConfig()).copyWith(
+      baseUrl: 'https://api.test',
+      bypassConnectivityCheck: true,
+      retry: const RetryPolicy.disabled(),
+      logging: const ApiLogOptions(enabled: false),
+      httpClientAdapter: adapter,
+    ),
+  );
 }
 
 void main() {
@@ -118,6 +123,36 @@ void main() {
       expect(result.isRight(), isTrue);
     });
 
+    test('head skips isSuccess, since it has no body to judge', () async {
+      // The documented envelope check reads the body. On a HEAD that body is
+      // empty, so the predicate threw — and a throw counts as a rejection.
+      final adapter = _RecordingAdapter(
+        responder: (_) => ResponseBody.fromString('', 200),
+      );
+      _init(
+        adapter,
+        config: ApiConfig(isSuccess: (r) => r.data['success'] == true),
+      );
+
+      final result = await ApiServices.instance().head(endpoint: '/report.pdf');
+
+      expect(result.isRight(), isTrue);
+    });
+
+    test('a GET with the same predicate is still judged', () async {
+      final adapter = _RecordingAdapter(
+        responder: (_) => _json('{"success":false}'),
+      );
+      _init(
+        adapter,
+        config: ApiConfig(isSuccess: (r) => r.data['success'] == true),
+      );
+
+      final result = await ApiServices.instance().get(endpoint: '/report');
+
+      expect(result.isLeft(), isTrue);
+    });
+
     test('options sends OPTIONS', () async {
       final adapter = _RecordingAdapter();
       _init(adapter);
@@ -132,12 +167,15 @@ void main() {
       // RetryPolicy.idempotentMethods already listed them.
       expect(const RetryPolicy().isIdempotent(HttpMethod.head.value), isTrue);
       expect(
-          const RetryPolicy().isIdempotent(HttpMethod.options.value), isTrue);
+        const RetryPolicy().isIdempotent(HttpMethod.options.value),
+        isTrue,
+      );
     });
 
     test('head is de-duplicated like a get', () async {
-      final adapter =
-          _RecordingAdapter(delay: const Duration(milliseconds: 40));
+      final adapter = _RecordingAdapter(
+        delay: const Duration(milliseconds: 40),
+      );
       _init(adapter);
 
       final api = ApiServices.instance();
@@ -152,8 +190,9 @@ void main() {
 
   group('cancellation by tag', () {
     test('cancels only the requests carrying that tag', () async {
-      final adapter =
-          _RecordingAdapter(delay: const Duration(milliseconds: 200));
+      final adapter = _RecordingAdapter(
+        delay: const Duration(milliseconds: 200),
+      );
       _init(adapter);
       final api = ApiServices.instance();
 
@@ -165,14 +204,17 @@ void main() {
       api.cancelRequest(tag: 'feed', cancellationReason: 'left the feed');
 
       expect(
-          (await tagged).getLeft().toNullable()?.errorType, ErrorSource.cancel);
+        (await tagged).getLeft().toNullable()?.errorType,
+        ErrorSource.cancel,
+      );
       expect((await untagged).isRight(), isTrue);
       expect((await otherTag).isRight(), isTrue);
     });
 
     test('omitting the tag still cancels everything', () async {
-      final adapter =
-          _RecordingAdapter(delay: const Duration(milliseconds: 200));
+      final adapter = _RecordingAdapter(
+        delay: const Duration(milliseconds: 200),
+      );
       _init(adapter);
       final api = ApiServices.instance();
 
@@ -183,16 +225,21 @@ void main() {
       api.cancelRequest();
 
       expect(
-          (await tagged).getLeft().toNullable()?.errorType, ErrorSource.cancel);
-      expect((await untagged).getLeft().toNullable()?.errorType,
-          ErrorSource.cancel);
+        (await tagged).getLeft().toNullable()?.errorType,
+        ErrorSource.cancel,
+      );
+      expect(
+        (await untagged).getLeft().toNullable()?.errorType,
+        ErrorSource.cancel,
+      );
     });
 
     test('a tagged request opts out of de-duplication', () async {
       // Two callers sharing one network call would let cancelRequest(tag:)
       // abort a request the other caller is still waiting on.
-      final adapter =
-          _RecordingAdapter(delay: const Duration(milliseconds: 40));
+      final adapter = _RecordingAdapter(
+        delay: const Duration(milliseconds: 40),
+      );
       _init(adapter);
       final api = ApiServices.instance();
 
@@ -217,8 +264,9 @@ void main() {
     });
 
     test('download honours its tag', () async {
-      final adapter =
-          _RecordingAdapter(delay: const Duration(milliseconds: 200));
+      final adapter = _RecordingAdapter(
+        delay: const Duration(milliseconds: 200),
+      );
       _init(adapter);
       final api = ApiServices.instance();
 
@@ -231,8 +279,10 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       api.cancelRequest(tag: 'downloads');
 
-      expect((await download).getLeft().toNullable()?.errorType,
-          ErrorSource.cancel);
+      expect(
+        (await download).getLeft().toNullable()?.errorType,
+        ErrorSource.cancel,
+      );
     });
   });
 
@@ -240,25 +290,29 @@ void main() {
     test('shapes the failure for a 2xx that isSuccess rejected', () async {
       final adapter = _RecordingAdapter(
         responder: (_) => _json(
-            '{"success":false,"code":"INSUFFICIENT_FUNDS","msg":"No funds"}'),
+          '{"success":false,"code":"INSUFFICIENT_FUNDS","msg":"No funds"}',
+        ),
       );
-      _init(adapter,
-          config: ApiConfig(
-            isSuccess: (r) => (r.data as Map)['success'] != false,
-            onRejected: (r) {
-              final body = r.data as Map;
-              return Failure(
-                ErrorSource.forbidden,
-                ResponseCode.forbidden,
-                body['msg'] as String,
-                data: body,
-                statusCode: r.statusCode,
-              );
-            },
-          ));
+      _init(
+        adapter,
+        config: ApiConfig(
+          isSuccess: (r) => (r.data as Map)['success'] != false,
+          onRejected: (r) {
+            final body = r.data as Map;
+            return Failure(
+              ErrorSource.forbidden,
+              ResponseCode.forbidden,
+              body['msg'] as String,
+              data: body,
+              statusCode: r.statusCode,
+            );
+          },
+        ),
+      );
 
-      final failure =
-          (await ApiServices.instance().get(endpoint: '/pay')).getLeft();
+      final failure = (await ApiServices.instance().get(
+        endpoint: '/pay',
+      )).getLeft();
 
       expect(failure.toNullable()!.errorType, ErrorSource.forbidden);
       expect(failure.toNullable()!.message, 'No funds');
@@ -266,12 +320,14 @@ void main() {
       expect((failure.toNullable()!.data as Map)['code'], 'INSUFFICIENT_FUNDS');
     });
 
-    test('carries the originating request so the observer can report it',
-        () async {
-      final adapter = _RecordingAdapter(
-        responder: (_) => _json('{"success":false}'),
-      );
-      _init(adapter,
+    test(
+      'carries the originating request so the observer can report it',
+      () async {
+        final adapter = _RecordingAdapter(
+          responder: (_) => _json('{"success":false}'),
+        );
+        _init(
+          adapter,
           config: ApiConfig(
             isSuccess: (r) => (r.data as Map)['success'] != false,
             onRejected: (_) => const Failure(
@@ -279,28 +335,32 @@ void main() {
               ResponseCode.conflict,
               'nope',
             ),
-          ));
+          ),
+        );
 
-      final failure = (await ApiServices.instance().get(endpoint: '/pay'))
-          .getLeft()
-          .toNullable()!;
+        final failure = (await ApiServices.instance().get(
+          endpoint: '/pay',
+        )).getLeft().toNullable()!;
 
-      expect(failure.requestOptions?.path, '/pay');
-    });
+        expect(failure.requestOptions?.path, '/pay');
+      },
+    );
 
     test('returning null falls back to the generic failure', () async {
       final adapter = _RecordingAdapter(
         responder: (_) => _json('{"success":false,"message":"from body"}'),
       );
-      _init(adapter,
-          config: ApiConfig(
-            isSuccess: (r) => (r.data as Map)['success'] != false,
-            onRejected: (_) => null,
-          ));
+      _init(
+        adapter,
+        config: ApiConfig(
+          isSuccess: (r) => (r.data as Map)['success'] != false,
+          onRejected: (_) => null,
+        ),
+      );
 
-      final failure = (await ApiServices.instance().get(endpoint: '/pay'))
-          .getLeft()
-          .toNullable()!;
+      final failure = (await ApiServices.instance().get(
+        endpoint: '/pay',
+      )).getLeft().toNullable()!;
 
       expect(failure.errorType, ErrorSource.badRequest);
       expect(failure.message, 'from body');
@@ -310,11 +370,13 @@ void main() {
       final adapter = _RecordingAdapter(
         responder: (_) => _json('{"success":false,"message":"from body"}'),
       );
-      _init(adapter,
-          config: ApiConfig(
-            isSuccess: (r) => (r.data as Map)['success'] != false,
-            onRejected: (_) => throw StateError('broken builder'),
-          ));
+      _init(
+        adapter,
+        config: ApiConfig(
+          isSuccess: (r) => (r.data as Map)['success'] != false,
+          onRejected: (_) => throw StateError('broken builder'),
+        ),
+      );
 
       final result = await ApiServices.instance().get(endpoint: '/pay');
 
@@ -324,18 +386,44 @@ void main() {
     test('is not consulted when isSuccess accepts the response', () async {
       var called = false;
       final adapter = _RecordingAdapter(responder: (_) => _json('{"ok":true}'));
-      _init(adapter,
-          config: ApiConfig(
-            isSuccess: (r) => true,
-            onRejected: (_) {
-              called = true;
-              return null;
-            },
-          ));
+      _init(
+        adapter,
+        config: ApiConfig(
+          isSuccess: (r) => true,
+          onRejected: (_) {
+            called = true;
+            return null;
+          },
+        ),
+      );
 
-      expect((await ApiServices.instance().get(endpoint: '/ok')).isRight(),
-          isTrue);
+      expect(
+        (await ApiServices.instance().get(endpoint: '/ok')).isRight(),
+        isTrue,
+      );
       expect(called, isFalse);
     });
+  });
+
+  test('a 504 is a gatewayTimeout, not an unexpected error', () async {
+    final adapter = _RecordingAdapter(
+      responder: (_) => ResponseBody.fromString(
+        '<html><body>504 Gateway Time-out</body></html>',
+        504,
+        headers: {
+          Headers.contentTypeHeader: ['text/html'],
+        },
+      ),
+    );
+    _init(adapter);
+
+    final failure = (await ApiServices.instance().get(
+      endpoint: '/slow',
+    )).getLeft().toNullable()!;
+
+    expect(failure.errorType, ErrorSource.gatewayTimeout);
+    expect(failure.code, ResponseCode.gatewayTimeout);
+    expect(failure.statusCode, 504);
+    expect(failure.message, isNot(contains('<html>')));
   });
 }

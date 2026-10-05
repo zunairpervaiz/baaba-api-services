@@ -35,15 +35,17 @@ void runApiTestCases() {
       registerFallbackValue(Options());
 
       when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => true);
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenAnswer((_) async => successResponse);
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenAnswer((_) async => successResponse);
 
       apiServices = ApiServicesImplementation.instanceFor(
         dio: mockDio,
@@ -61,20 +63,26 @@ void runApiTestCases() {
     });
 
     test('POST returns Right(Response) on success', () async {
-      final result =
-          await apiServices.post(endpoint: '/users', data: {'name': 'test'});
+      final result = await apiServices.post(
+        endpoint: '/users',
+        data: {'name': 'test'},
+      );
       expect(result.isRight(), isTrue);
     });
 
     test('PUT returns Right(Response) on success', () async {
-      final result =
-          await apiServices.put(endpoint: '/users/1', data: {'name': 'test'});
+      final result = await apiServices.put(
+        endpoint: '/users/1',
+        data: {'name': 'test'},
+      );
       expect(result.isRight(), isTrue);
     });
 
     test('PATCH returns Right(Response) on success', () async {
-      final result =
-          await apiServices.patch(endpoint: '/users/1', data: {'name': 'test'});
+      final result = await apiServices.patch(
+        endpoint: '/users/1',
+        data: {'name': 'test'},
+      );
       expect(result.isRight(), isTrue);
     });
 
@@ -94,18 +102,22 @@ void runApiTestCases() {
     });
 
     test('returns Left(Failure) on DioException', () async {
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenThrow(DioException(
-        requestOptions: RequestOptions(path: ''),
-        type: DioExceptionType.connectionTimeout,
-      ));
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenThrow(
+        DioException(
+          requestOptions: RequestOptions(path: ''),
+          type: DioExceptionType.connectionTimeout,
+        ),
+      );
 
       final result = await apiServices.get(endpoint: '/users');
       expect(result.isLeft(), isTrue);
@@ -149,15 +161,17 @@ void runApiTestCases() {
     });
 
     test('shows and hides the loader around a successful request', () async {
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenAnswer((_) async => successResponse);
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenAnswer((_) async => successResponse);
 
       await apiServices.get(endpoint: '/users');
 
@@ -165,18 +179,22 @@ void runApiTestCases() {
     });
 
     test('shows and hides the loader when the request throws', () async {
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenThrow(DioException(
-        requestOptions: RequestOptions(path: ''),
-        type: DioExceptionType.connectionTimeout,
-      ));
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenThrow(
+        DioException(
+          requestOptions: RequestOptions(path: ''),
+          type: DioExceptionType.connectionTimeout,
+        ),
+      );
 
       await apiServices.get(endpoint: '/users');
 
@@ -192,15 +210,17 @@ void runApiTestCases() {
     });
 
     test('skips the loader when showLoader is false', () async {
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenAnswer((_) async => successResponse);
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenAnswer((_) async => successResponse);
 
       await apiServices.get(endpoint: '/users', showLoader: false);
 
@@ -209,15 +229,17 @@ void runApiTestCases() {
 
     test('shows once and hides once for two concurrent requests', () async {
       final completer = Completer<Response>();
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenAnswer((_) => completer.future);
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenAnswer((_) => completer.future);
 
       final first = apiServices.get(endpoint: '/users');
       final second = apiServices.get(endpoint: '/orders');
@@ -240,12 +262,12 @@ void runApiTestCases() {
       ResponseCode.unauthorized: ErrorSource.unauthorized,
       ResponseCode.forbidden: ErrorSource.forbidden,
       ResponseCode.internalServerError: ErrorSource.internalServerError,
+      ResponseCode.gatewayTimeout: ErrorSource.gatewayTimeout,
       ResponseCode.notFound: ErrorSource.notFound,
       ResponseCode.connectTimeout: ErrorSource.connectionTimeout,
       ResponseCode.cancel: ErrorSource.cancel,
       ResponseCode.receiveTimeout: ErrorSource.receiveTimeout,
       ResponseCode.sendTimeout: ErrorSource.sendTimeout,
-      ResponseCode.cacheError: ErrorSource.cacheError,
       ResponseCode.noInternetConnection: ErrorSource.noInternetConnection,
       ResponseCode.defaultError: ErrorSource.defaultError,
       ResponseCode.connectionFailure: ErrorSource.connectionFailure,
@@ -254,7 +276,9 @@ void runApiTestCases() {
     testCases.forEach((responseCode, expectedErrorSource) {
       test('$responseCode maps to $expectedErrorSource', () {
         expect(
-            mapResponseCodeToEnum(responseCode), equals(expectedErrorSource));
+          mapResponseCodeToEnum(responseCode),
+          equals(expectedErrorSource),
+        );
       });
     });
   });

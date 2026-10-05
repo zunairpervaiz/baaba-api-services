@@ -7,8 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// A base64 run of the size a fingerprint or a photograph actually reaches.
 String base64Blob([int chars = 4000]) =>
-    ('iVBORw0KGgoAAAANSUhEUgAAAu4AAAK8CAYAAAA' * (chars ~/ 39 + 1))
-        .substring(0, chars);
+    ('iVBORw0KGgoAAAANSUhEUgAAAu4AAAK8CAYAAAA' * (chars ~/ 39 + 1)).substring(
+      0,
+      chars,
+    );
 
 class _StubAdapter implements HttpClientAdapter {
   final String body;
@@ -16,11 +18,17 @@ class _StubAdapter implements HttpClientAdapter {
   _StubAdapter(this.body);
 
   @override
-  Future<ResponseBody> fetch(RequestOptions options,
-          Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async =>
-      ResponseBody.fromString(body, 200, headers: {
-        Headers.contentTypeHeader: [Headers.jsonContentType],
-      });
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody.fromString(
+    body,
+    200,
+    headers: {
+      Headers.contentTypeHeader: [Headers.jsonContentType],
+    },
+  );
 
   @override
   void close({bool force = false}) {}
@@ -52,6 +60,35 @@ void main() {
     test('a stack trace', () {
       const line =
           '║ #0      _MyHomePageState.build (package:app/main.dart:42:5)';
+      trim(line);
+
+      expect(out, [line]);
+    });
+
+    test('a long url path', () {
+      // `/` is in the base64 alphabet, so a dot-free path is the right shape.
+      const line =
+          '║  https://api.example.com/api/v1/organizations/12345'
+          '/departments/67890/employees';
+      trim(line);
+
+      expect(out, [line]);
+    });
+
+    test('a hex digest or git SHA', () {
+      const sha256 =
+          '║ "checksum": '
+          '"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"';
+      const sha1 = '║ "commit": "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"';
+      trim(sha256);
+      trim(sha1);
+
+      expect(out, [sha256, sha1]);
+    });
+
+    test('a slash-dense path that also mixes case', () {
+      const line =
+          '║ "path": /storage/emulated/0/Android/media/Camera/Pictures/Uploads';
       trim(line);
 
       expect(out, [line]);

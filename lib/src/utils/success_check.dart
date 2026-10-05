@@ -35,14 +35,16 @@ Either<Failure, Response> evaluateSuccess(Response response, ApiConfig config) {
   // Read the message from the body the same way a real error response would.
   final body = response.data;
   final message = extractErrorMessage(body);
-  return left(Failure(
-    ErrorSource.badRequest,
-    ResponseCode.badRequest,
-    message.isNotEmpty ? message : ResponseStrings.badRequest,
-    data: body,
-    statusCode: response.statusCode,
-    requestOptions: response.requestOptions,
-  ));
+  return left(
+    Failure(
+      ErrorSource.badRequest,
+      ResponseCode.badRequest,
+      message.isNotEmpty ? message : ResponseStrings.badRequest,
+      data: body,
+      statusCode: response.statusCode,
+      requestOptions: response.requestOptions,
+    ),
+  );
 }
 
 /// Runs the consumer's `isSuccess`, treating a throw as a rejection.

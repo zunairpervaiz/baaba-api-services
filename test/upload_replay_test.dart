@@ -34,9 +34,13 @@ class _BodyReadingAdapter implements HttpClientAdapter {
     bodyLengths.add(length);
 
     final status = index < statuses.length ? statuses[index] : 200;
-    return ResponseBody.fromString('{}', status, headers: {
-      Headers.contentTypeHeader: [Headers.jsonContentType],
-    });
+    return ResponseBody.fromString(
+      '{}',
+      status,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
   }
 
   @override
@@ -44,12 +48,12 @@ class _BodyReadingAdapter implements HttpClientAdapter {
 }
 
 FormData buildForm() => FormData.fromMap({
-      'caption': 'Beach trip',
-      'photo': MultipartFile.fromBytes(
-        List<int>.filled(2048, 7),
-        filename: 'photo.png',
-      ),
-    });
+  'caption': 'Beach trip',
+  'photo': MultipartFile.fromBytes(
+    List<int>.filled(2048, 7),
+    filename: 'photo.png',
+  ),
+});
 
 void main() {
   group('prepareForReplay', () {
@@ -94,13 +98,15 @@ void main() {
       // cloning, the second attempt throws StateError from finalize().
       final adapter = _BodyReadingAdapter([503]);
       final dio = Dio(BaseOptions(baseUrl: 'https://example.com'));
-      dio.interceptors.add(NetworkRetryInterceptor(
-        dio: dio,
-        policy: const RetryPolicy(
-          baseDelay: Duration(milliseconds: 1),
-          useJitter: false,
+      dio.interceptors.add(
+        NetworkRetryInterceptor(
+          dio: dio,
+          policy: const RetryPolicy(
+            baseDelay: Duration(milliseconds: 1),
+            useJitter: false,
+          ),
         ),
-      ));
+      );
       dio.httpClientAdapter = adapter;
 
       final response = await dio.post('/documents', data: buildForm());
@@ -117,13 +123,15 @@ void main() {
       // the file before the connection dropped.
       final adapter = _BodyReadingAdapter([]);
       final dio = Dio(BaseOptions(baseUrl: 'https://example.com'));
-      dio.interceptors.add(NetworkRetryInterceptor(
-        dio: dio,
-        policy: const RetryPolicy(
-          baseDelay: Duration(milliseconds: 1),
-          useJitter: false,
+      dio.interceptors.add(
+        NetworkRetryInterceptor(
+          dio: dio,
+          policy: const RetryPolicy(
+            baseDelay: Duration(milliseconds: 1),
+            useJitter: false,
+          ),
         ),
-      ));
+      );
       dio.httpClientAdapter = _ThrowingAdapter();
 
       await expectLater(
@@ -141,14 +149,16 @@ void main() {
       final adapter = _BodyReadingAdapter([401]);
       final dio = Dio(BaseOptions(baseUrl: 'https://example.com'));
       var token = 'stale';
-      dio.interceptors.add(TokenRefreshInterceptor(
-        dio: dio,
-        getToken: () async => token,
-        onTokenRefresh: () async {
-          token = 'fresh';
-          return true;
-        },
-      ));
+      dio.interceptors.add(
+        TokenRefreshInterceptor(
+          dio: dio,
+          getToken: () async => token,
+          onTokenRefresh: () async {
+            token = 'fresh';
+            return true;
+          },
+        ),
+      );
       dio.httpClientAdapter = adapter;
 
       final response = await dio.post('/documents', data: buildForm());
@@ -162,8 +172,11 @@ void main() {
 
 class _ThrowingAdapter implements HttpClientAdapter {
   @override
-  Future<ResponseBody> fetch(RequestOptions options,
-      Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
     throw DioException(
       requestOptions: options,
       type: DioExceptionType.connectionError,

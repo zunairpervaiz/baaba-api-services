@@ -1,6 +1,6 @@
 # baaba_api_handler
 
-A typed, functional HTTP client for Flutter. Wraps [Dio](https://pub.dev/packages/dio) with `Either`-based error handling, automatic token refresh, configurable retries, response caching, and a built-in test double.
+A typed, functional HTTP client for Flutter. Wraps [Dio](https://pub.dev/packages/dio) with `Either`-based error handling, automatic token refresh, configurable retries, request de-duplication, and a built-in test double.
 
 No exceptions cross the API boundary — every method returns `Either<Failure, T>`.
 
@@ -13,6 +13,8 @@ result.fold(
 );
 ```
 
+> **Upgrading from 3.x?** 4.0.0 requires Flutter 3.32 (Dart 3.8), removes response caching and the `api_cache_manager` dependency, and adds `ErrorSource.gatewayTimeout` — see [MIGRATION.md](MIGRATION.md).
+>
 > **Upgrading from 2.x?** 3.0.0 requires `equatable` 3 and removes the deprecated `configure()`, `setConnectivityCheck()` and `setLogging()`. [MIGRATION.md](MIGRATION.md) lists every change with its fix. Coming from 1.x, follow the 2.0.0 section of the same guide first.
 
 ## Table of Contents
@@ -34,8 +36,7 @@ result.fold(
 - [Interceptors](#interceptors)
 - [Concurrency](#concurrency)
 - [Connectivity checks](#connectivity-checks)
-- [Caching](#caching)
-  - [Bounding the cache](#bounding-the-cache)
+- [De-duplication](#de-duplication)
 - [Retries](#retries)
 - [Observability](#observability)
 - [Loading indicator](#loading-indicator)
@@ -50,14 +51,16 @@ result.fold(
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^3.1.0
+  baaba_api_handler: ^4.0.0
 ```
+
+Requires Flutter 3.32 / Dart 3.8 or newer. Works on Android, iOS, web, and desktop.
 
 ```dart
 import 'package:baaba_api_handler/baaba_api_handler.dart';
 ```
 
-> `Response`, `CancelToken`, `FormData` (Dio) and `APICacheDBModel` are re-exported from this single import — you don't need `dio` or `api_cache_manager` as direct dependencies.
+> `Response`, `CancelToken`, `FormData` (Dio) and `Either` (fpdart) are re-exported from this single import — you don't need `dio` or `fpdart` as direct dependencies.
 
 ---
 
@@ -153,7 +156,7 @@ Shared by every HTTP method:
 | `onReceiveProgress` | `ProgressCallback?` | Download progress. |
 | `showLoader` | `bool` | Opt this request out of the global loader. Defaults to `true`. |
 
-`get` and `getAs` additionally accept `cachePolicy`, `cacheMaxAge`, and `dedupe` — see [Caching](#caching).
+`get`, `getAs`, `head` and `options` additionally accept `dedupe` — see [De-duplication](#de-duplication).
 
 ### Response types
 
@@ -324,6 +327,8 @@ ApiServices.init(ApiConfig(
 
 Return `null` to fall back to the generic failure. It is only consulted when `isSuccess` returns `false` — or throws, which counts as a rejection rather than escaping as an exception.
 
+`isSuccess` is not applied to `head()` or `download()` — neither has a body in `response.data` to judge.
+
 ---
 
 ## Authentication
@@ -341,7 +346,7 @@ ApiServices.init(ApiConfig(
 ));
 ```
 
-A burst of concurrent `401`s — the usual shape of a token expiring — all wait on one refresh and retry, rather than only the first succeeding. `refreshTimeout` bounds that wait, so the pathological case where the refresh endpoint itself `401`s surfaces the original error instead of deadlocking. A `401` that arrives after another request's refresh has already finished is replayed with the new token rather than triggering a second refresh.
+A burst of concurrent `401`s — the usual shape of a token expiring — all wait on one refresh and retry, rather than only the first succeeding. `refreshTimeout` bounds that wait. A refresh request made through the same client that itself `401`s — an expired refresh token — fails at once, so `onRefreshFailed` fires without delay. A `401` that arrives after another request's refresh has already finished is replayed with the new token rather than triggering a second refresh.
 
 By default the token goes out as `Authorization: Bearer <token>`. `headerBuilder` changes that:
 
@@ -411,7 +416,7 @@ A screen that fires twenty requests on mount sends all twenty at once. On a mobi
 ApiServices.init(const ApiConfig(maxConcurrentRequests: 6));
 ```
 
-Requests past the cap queue in the order they were made and start as slots free up. The cap governs actual network calls: a cache hit and a request collapsed by [de-duplication](#de-duplication) don't consume a slot. A queued request is still cancellable, and still holds the loading indicator — it's pending, not finished.
+Requests past the cap queue in the order they were made and start as slots free up. The cap governs actual network calls: a request collapsed by [de-duplication](#de-duplication) doesn't consume a slot of its own. A queued request is still cancellable, and still holds the loading indicator — it's pending, not finished.
 
 Unset by default, which is unlimited.
 
@@ -440,92 +445,11 @@ It must not throw — one that does is read as "offline". To skip the check enti
 
 ---
 
-## Caching
+## De-duplication
 
-Opt in per request. The default, `CachePolicy.networkOnly`, ignores the cache entirely.
+Two identical `GET`s (or `HEAD`/`OPTIONS` requests) in flight at the same time share one network call — the common case being several widgets on one screen asking for the same resource. Pass `dedupe: false` to opt out. "Identical" means the same url, query, body, headers and `responseType` — a request for bytes is never handed another caller's decoded JSON. It is skipped automatically when you supply your own `CancelToken` or a `tag`, since cancelling one caller must not cancel the other, and when you pass a progress callback, which only one caller's request could drive.
 
-```dart
-final result = await api.get(
-  endpoint: '/products',
-  cachePolicy: CachePolicy.networkFirst,
-  cacheMaxAge: const Duration(minutes: 10),
-);
-
-result.fold(
-  (failure) => showError(failure.message),
-  (response) {
-    if (response.isFromCache) showBanner('Offline — showing saved data');
-    render(response.data);
-  },
-);
-```
-
-| Policy | Behaviour |
-| --- | --- |
-| `networkOnly` | Never reads or writes the cache. The default. |
-| `cacheFirst` | Fresh hit → return it, no network. Miss or stale → network, then store. |
-| `networkFirst` | Network → store and return. On failure → fall back to the cache; if nothing is cached, the original failure is returned unchanged. |
-| `cacheOnly` | Hit → return. Miss → `Failure` with `ErrorSource.cacheError`. Never touches the network. |
-
-Only `get` and `getAs` ever read or write the cache — a project-wide policy does not leak onto `post`, `put`, `patch`, `delete`, `head` or `options`, so a write is never answered from a cached response.
-
-### Bounding the cache
-
-Left alone the cache only grows: every distinct url and query combination adds an entry that nothing removes. `cacheMaxAge` does not help — it discards a stale entry when something *reads* it, so a key that is never requested again is never reclaimed.
-
-Set a bound and the oldest entries are evicted to make room:
-
-```dart
-ApiServices.init(const ApiConfig(
-  defaultCachePolicy: CachePolicy.networkFirst,
-  cacheMaxEntries: 500,
-  cacheMaxBytes: 5 * 1024 * 1024,
-));
-```
-
-Both are optional and apply together — whichever binds first. "Oldest" means least recently *written*, not least recently read: tracking reads would mean a disk write on every cache hit, costing more than the eviction saves. A single response larger than `cacheMaxBytes` is still stored; the cap governs the total.
-
-Leave both unset and the cache stays unbounded, exactly as before — nothing is tracked and nothing is evicted.
-
-### Project-level control
-
-Not every app should cache. Two levers on `ApiConfig`:
-
-```dart
-// Nothing may cache, whatever a call site asks for. The database is never
-// even opened. For apps where "no response body is written to disk" is a
-// requirement rather than a preference.
-ApiServices.init(const ApiConfig(cacheEnabled: false));
-
-// Or the opposite: make caching the norm without annotating every call.
-// Individual calls can still opt out with `cachePolicy: CachePolicy.networkOnly`.
-ApiServices.init(const ApiConfig(defaultCachePolicy: CachePolicy.networkFirst));
-```
-
-`cacheEnabled: false` overrides both `defaultCachePolicy` and any explicit `cachePolicy` argument, so one stray call site can't undo it. Leaving the defaults alone also results in no caching — but that relies on every call site getting it right, and this doesn't.
-
-Only successful (`2xx`) responses are stored, and caching is best-effort — a body that will not encode is skipped rather than failing the request. Query parameters are part of the cache key, so `?page=1` and `?page=2` are separate entries.
-
-> **Cached entries are not scoped per user.** Call `ApiCacheHelper.instance.clearAllCache()` on logout, or the next user will read the previous one's responses.
-
-`ApiCacheHelper` is also usable directly, for caching things the HTTP layer doesn't own:
-
-```dart
-final cache = ApiCacheHelper.instance;
-
-await cache.setCacheData('user_prefs', jsonEncode(prefs));
-final entry = await cache.getCacheData('user_prefs', maxAge: const Duration(days: 1));
-await cache.clearCache('user_prefs');
-await cache.clearAllCache();
-```
-
-`getCacheData` returns `null` on a miss or when the entry is older than `maxAge`.
-
-### De-duplication
-
-Two identical `GET`s in flight at the same time share one network call — the common case being several widgets on one screen asking for the same resource. Pass `dedupe: false` to opt out. "Identical" means the same url, query, body, headers and `responseType` — a request for bytes is never handed another caller's decoded JSON. It is skipped automatically when you supply your own `CancelToken` or a `tag`, since cancelling one caller must not cancel the other, and when you pass a progress callback, which only one caller's request could drive.
-
-De-duplication is not a cache: sequential requests each hit the network.
+De-duplication only collapses overlapping calls: sequential requests each hit the network. The package does not cache responses — if you need offline data, store it in your own persistence layer.
 
 ---
 
@@ -760,11 +684,14 @@ test('surfaces a validation error', () async {
 | `stubFailure(method, endpoint, ...)` | Queue a failure, from a `Failure` or a status/body — built exactly as the real client builds one, so a `401` is `ErrorSource.unauthorized` carrying the body's message. |
 | `stubOffline(method, endpoint)` | Queue the no-connection short-circuit. |
 | `stub(method, endpoint, either)` | Queue a raw `Either` for full control. |
+| `stubDownload(endpoint)` | Queue a successful `download`. The `savePath` is recorded as the call's `data`. |
 | `recordedCalls` | Every call made, with endpoint, body, params, headers, files. |
-| `cancellations` | Reasons passed to `cancelRequest`. |
+| `cancellations` / `cancelledTags` | Reasons and tags passed to `cancelRequest`. |
 | `reset()` | Clear stubs and history. |
 
 Stub the same endpoint more than once to script a sequence — each call consumes one entry and the last repeats, which makes "fails, then succeeds on retry" easy to set up. Calling an endpoint you didn't stub throws a `StateError` naming it, so an unexpected call fails loudly instead of quietly returning null.
+
+The fake honours the parts of `ApiConfig` that shape an outcome, the same way the real client does: `isSuccess` (except on `head` and `download`), an already-cancelled `CancelToken`, and the `observer` — `onRequest` for every call that would have reached the network, then exactly one of `onResponse` or `onFailure` (both, for a `*As<T>` parse failure). Test your observer wiring through it with `ApiServices.init(ApiConfig(observer: ...))`.
 
 Add `ApiServices.reset()` to `tearDown` so configuration doesn't leak between tests.
 
@@ -786,10 +713,6 @@ Every field on `ApiConfig`:
 | `connectivityProbe` | `null` | Replaces the default third-party ping with your own check. |
 | `logging` | `ApiLogOptions()` | Console logger settings. |
 | `retry` | `RetryPolicy()` | How transient failures are retried. |
-| `cacheEnabled` | `true` | Master switch. `false` forbids caching outright, whatever a call site asks for. |
-| `defaultCachePolicy` | `networkOnly` | Policy for `get`/`getAs` calls that don't name one. |
-| `cacheMaxEntries` | `null` | Cap on cached entries; oldest are evicted past it. Unbounded when unset. |
-| `cacheMaxBytes` | `null` | Cap on total cached bytes, evicting the same way. Unbounded when unset. |
 | `isSuccess` | `null` | Reject a `2xx` whose body says otherwise. |
 | `onRejected` | `null` | Builds the `Failure` for a response `isSuccess` rejected. |
 | `httpClientAdapter` | `null` | Certificate pinning, proxies. |
@@ -798,7 +721,7 @@ Every field on `ApiConfig`:
 | `maxConcurrentRequests` | `null` | Cap on requests in flight at once. Unlimited when unset; must be positive. A token refresh made through the client is never queued behind it. |
 | `auth` | `null` | Token auth and refresh. |
 
-Settings read at request time take effect immediately: `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `cacheEnabled`, `defaultCachePolicy`, `cacheMaxEntries`, `cacheMaxBytes`, and the observer's `onResponse`/`onFailure`. The rest are fixed when `init` builds the client, so changing them means calling `init` again: `baseUrl`, timeouts, `defaultHeaders`, `logging`, `retry`, `auth`, `interceptors`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and the observer's `onRequest`.
+Settings read at request time take effect immediately: `bypassConnectivityCheck`, `isSuccess`, `onRejected`, and the observer's `onResponse`/`onFailure`. The rest are fixed when `init` builds the client, so changing them means calling `init` again: `baseUrl`, timeouts, `defaultHeaders`, `logging`, `retry`, `auth`, `interceptors`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and the observer's `onRequest`.
 
 ---
 

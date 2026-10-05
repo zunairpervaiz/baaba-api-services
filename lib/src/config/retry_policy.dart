@@ -101,18 +101,23 @@ class RetryPolicy {
 
   /// No retries at all — a failure surfaces immediately.
   const RetryPolicy.disabled()
-      : maxRetries = 0,
-        baseDelay = const Duration(milliseconds: 500),
-        maxDelay = const Duration(seconds: 30),
-        useJitter = true,
-        respectRetryAfter = true,
-        retryableStatusCodes = const {},
-        retryIf = null;
+    : maxRetries = 0,
+      baseDelay = const Duration(milliseconds: 500),
+      maxDelay = const Duration(seconds: 30),
+      useJitter = true,
+      respectRetryAfter = true,
+      retryableStatusCodes = const {},
+      retryIf = null;
 
   /// Whether [method] may be repeated without risking a duplicate side effect.
   bool isIdempotent(String method) =>
       idempotentMethods.contains(method.toUpperCase());
 
+  /// Returns a copy with the given fields replaced.
+  ///
+  /// Only replaces — passing `null` is indistinguishable from omitting the
+  /// argument, so it cannot remove a [retryIf]. Build a fresh [RetryPolicy]
+  /// for that.
   RetryPolicy copyWith({
     int? maxRetries,
     Duration? baseDelay,

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:baaba_api_handler/src/utils/constants.dart';
 
 /// Pulls a human-readable message out of an error response body.
@@ -8,15 +10,23 @@ import 'package:baaba_api_handler/src/utils/constants.dart';
 /// same body.
 ///
 /// Keys are tried in order — `message`, then `detail` (RFC 7807), then
-/// `error` — and a nested object is followed one level, so all of these yield
-/// `'Email already taken'`:
+/// `error`, then `msg` — and nested objects are followed up to two levels, so
+/// all of these yield `'Email already taken'`:
 ///
 /// ```json
 /// "Email already taken"
 /// {"message": "Email already taken"}
 /// {"detail":  "Email already taken"}
 /// {"error": {"message": "Email already taken"}}
+/// {"detail": [{"loc": ["body", "email"], "msg": "Email already taken"}]}
 /// ```
+///
+/// The last is FastAPI/Pydantic's default `422` shape: a list of objects,
+/// each read the same way.
+///
+/// A JSON body that arrives as a `String` — `responseType: plain`, or a
+/// server labelling JSON as `text/plain` — is decoded and read as JSON rather
+/// than shown to the user as raw `{"message": ...}` text.
 ///
 /// Returns `''` when nothing usable is found — the caller then falls back to
 /// the generic `ResponseStrings` text for the status code.
@@ -27,11 +37,19 @@ import 'package:baaba_api_handler/src/utils/constants.dart';
 String extractErrorMessage(dynamic data, {int depth = 0}) {
   if (data is String) {
     final text = data.trim();
-    return text.startsWith('<') ? '' : text;
+    if (text.startsWith('<')) return '';
+    if (depth == 0 && (text.startsWith('{') || text.startsWith('['))) {
+      try {
+        return extractErrorMessage(jsonDecode(text), depth: depth + 1);
+      } on FormatException {
+        // Not JSON after all — a message that happens to start with a brace.
+      }
+    }
+    return text;
   }
   if (data is! Map || depth > 2) return '';
 
-  for (final key in const [messageKey, detailKey, errorKey]) {
+  for (final key in const [messageKey, detailKey, errorKey, msgKey]) {
     if (!data.containsKey(key)) continue;
 
     final value = data[key];
@@ -50,9 +68,16 @@ String extractErrorMessage(dynamic data, {int depth = 0}) {
       continue;
     }
 
-    // {"detail": ["first problem", "second problem"]}
+    // {"detail": ["first problem", "second problem"]}, or a list of objects
+    // such as FastAPI's [{"loc": [...], "msg": "field required"}].
     if (value is List) {
-      final parts = value.whereType<String>().where((s) => s.isNotEmpty);
+      final parts = [
+        for (final item in value)
+          if (item is String)
+            item.trim()
+          else if (item is Map)
+            extractErrorMessage(item, depth: depth + 1),
+      ].where((s) => s.isNotEmpty);
       if (parts.isNotEmpty) return parts.join(' ');
       continue;
     }
@@ -87,8 +112,10 @@ Map<String, List<String>>? extractValidationErrors(dynamic data) {
     if (value is String) {
       result[field] = [value];
     } else if (value is List) {
-      final messages =
-          value.where((e) => e != null).map((e) => e.toString()).toList();
+      final messages = value
+          .where((e) => e != null)
+          .map((e) => e.toString())
+          .toList();
       if (messages.isNotEmpty) result[field] = messages;
     } else if (value != null) {
       result[field] = [value.toString()];

@@ -26,3 +26,17 @@ void prepareForReplay(RequestOptions options) {
     options.data = data.clone();
   }
 }
+
+/// Whether [options] can be sent again at all.
+///
+/// A `Stream` body cannot: a single-subscription stream throws `StateError`
+/// when listened to a second time, and a broadcast one has already emitted
+/// what the first attempt consumed, so a replay would send a truncated or
+/// empty body. Unlike `FormData` there is no factory to rebuild it from.
+///
+/// Both replay paths check this and give up on a stream body, surfacing the
+/// original error — a real `503` or `401`, with its status and body — rather
+/// than an `unknown` error wrapping the `StateError`. A caller who needs
+/// retries for a streamed upload should pass bytes, or `FormData` with
+/// `MultipartFile.fromFile`, which can be re-opened.
+bool canReplay(RequestOptions options) => options.data is! Stream;

@@ -1,25 +1,17 @@
-/// Builds the keys used for response caching and in-flight de-duplication.
+/// Builds the keys used for in-flight de-duplication.
 ///
-/// Both need the same property: two calls that would hit the same URL with the
-/// same inputs must produce the same string, and two calls that would not must
-/// not.
-///
-/// The pre-2.0.0 cache key was just the raw url, so `/users?page=1` and
-/// `/users?page=2` **collided** whenever the query lived in `params` rather
-/// than the path — the second page would overwrite the first in the cache.
-/// Query parameters are part of the key here, sorted so that argument order
-/// never changes the result.
-///
-/// Keys are not hashed. A digest would need to be stable across app restarts
-/// (`String.hashCode` is not, and a cryptographic hash would mean a new
-/// dependency), and SQLite handles long `TEXT` keys without complaint.
+/// Two calls that would hit the same URL with the same inputs must produce the
+/// same string, and two calls that would not must not. Query parameters are
+/// part of the key, sorted so that argument order never changes the result —
+/// a raw url would make `/users?page=1` and `/users?page=2` collide whenever
+/// the query lived in `params` rather than the path.
 library;
 
 import 'dart:convert';
 
 /// Joins [baseUrl] and [endpoint], leaving an already-absolute [endpoint]
 /// alone so a call to a CDN or third-party host keys correctly.
-String canonicalUrl(String? baseUrl, String endpoint) {
+String _canonicalUrl(String? baseUrl, String endpoint) {
   final isAbsolute =
       endpoint.startsWith('http://') || endpoint.startsWith('https://');
   if (isAbsolute || baseUrl == null || baseUrl.isEmpty) return endpoint;
@@ -33,7 +25,7 @@ String canonicalUrl(String? baseUrl, String endpoint) {
 
 /// Encodes [params] deterministically: keys sorted, values in the order given
 /// (list order can be meaningful to a server, so it is preserved).
-String canonicalQuery(Map<String, dynamic>? params) {
+String _canonicalQuery(Map<String, dynamic>? params) {
   if (params == null || params.isEmpty) return '';
 
   final keys = params.keys.toList()..sort();
@@ -58,19 +50,19 @@ String canonicalQuery(Map<String, dynamic>? params) {
 ///
 /// A null value becomes a bare key, matching `Transformer.urlEncodeQueryMap`.
 /// Writing it as `key=null` instead would give `{'a': null}` and
-/// `{'a': 'null'}` — two genuinely different URLs — the same cache key.
+/// `{'a': 'null'}` — two genuinely different URLs — the same key.
 String _pair(String encodedKey, Object? value) => value == null
     ? encodedKey
     : '$encodedKey=${Uri.encodeQueryComponent('$value')}';
 
-/// Key for a cached `GET` response.
-String buildCacheKey({
+/// The canonical url, query included, that [buildRequestKey] builds on.
+String buildUrlKey({
   String? baseUrl,
   required String endpoint,
   Map<String, dynamic>? params,
 }) {
-  final query = canonicalQuery(params);
-  final url = canonicalUrl(baseUrl, endpoint);
+  final query = _canonicalQuery(params);
+  final url = _canonicalUrl(baseUrl, endpoint);
   return query.isEmpty ? url : '$url?$query';
 }
 
@@ -101,7 +93,7 @@ String? buildRequestKey({
     return null;
   }
 
-  final base = buildCacheKey(
+  final base = buildUrlKey(
     baseUrl: baseUrl,
     endpoint: endpoint,
     params: params,

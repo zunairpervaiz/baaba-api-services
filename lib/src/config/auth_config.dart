@@ -50,7 +50,7 @@ class AuthConfig {
 
   /// Decides which hosts the token may be sent to.
   ///
-  /// **Without this, the token goes to every host the client talks to.**
+  /// **Not every host the client talks to should get the token.**
   /// `ApiConfig.baseUrl` supports absolute endpoints so a single client can
   /// reach a CDN or a third-party, which means a bearer token intended for
   /// your API can travel to `s3.amazonaws.com` or an analytics host purely
@@ -75,11 +75,12 @@ class AuthConfig {
   final bool Function(Uri uri)? sendTokenTo;
 
   /// Bounds how long a request that `401`s while a refresh is already in
-  /// flight waits for that refresh before giving up.
+  /// flight waits for that refresh before giving up — a safety net for an
+  /// [onTokenRefresh] that never completes.
   ///
-  /// Without a bound, a refresh endpoint that itself `401`s (expired refresh
-  /// token) would deadlock: its own call is queued behind the very refresh it
-  /// is part of.
+  /// A refresh request made through this client that itself `401`s (an
+  /// expired refresh token) does not wait here: it fails at once, so the
+  /// refresh reports failure and [onRefreshFailed] fires without delay.
   final Duration refreshTimeout;
 
   const AuthConfig({
@@ -91,6 +92,11 @@ class AuthConfig {
     this.refreshTimeout = const Duration(seconds: 30),
   });
 
+  /// Returns a copy with the given fields replaced.
+  ///
+  /// Only replaces — passing `null` is indistinguishable from omitting the
+  /// argument, so it cannot remove [onRefreshFailed], [headerBuilder] or
+  /// [sendTokenTo]. Build a fresh [AuthConfig] for that.
   AuthConfig copyWith({
     Future<String?> Function()? getToken,
     Future<bool> Function()? onTokenRefresh,

@@ -33,15 +33,17 @@ void main() {
   late ApiServices api;
 
   void stubNetwork({Object? body, DioException? error, int statusCode = 200}) {
-    when(() => mockDio.request<dynamic>(
-          any(),
-          data: any(named: 'data'),
-          queryParameters: any(named: 'queryParameters'),
-          options: any(named: 'options'),
-          cancelToken: any(named: 'cancelToken'),
-          onSendProgress: any(named: 'onSendProgress'),
-          onReceiveProgress: any(named: 'onReceiveProgress'),
-        )).thenAnswer((_) async {
+    when(
+      () => mockDio.request<dynamic>(
+        any(),
+        data: any(named: 'data'),
+        queryParameters: any(named: 'queryParameters'),
+        options: any(named: 'options'),
+        cancelToken: any(named: 'cancelToken'),
+        onSendProgress: any(named: 'onSendProgress'),
+        onReceiveProgress: any(named: 'onReceiveProgress'),
+      ),
+    ).thenAnswer((_) async {
       if (error != null) throw error;
       return Response(
         requestOptions: RequestOptions(path: '/users'),
@@ -115,7 +117,9 @@ void main() {
       await api.get(endpoint: '/users');
 
       expect(
-          observer.failures.single.errorType, ErrorSource.noInternetConnection);
+        observer.failures.single.errorType,
+        ErrorSource.noInternetConnection,
+      );
       // No request was ever built.
       expect(observer.failureOptions.single, isNull);
     });
@@ -125,15 +129,17 @@ void main() {
       // observer counts calls the app made, so both callers must be reported —
       // notifying from inside the shared request would emit only one.
       final gate = Completer<void>();
-      when(() => mockDio.request<dynamic>(
-            any(),
-            data: any(named: 'data'),
-            queryParameters: any(named: 'queryParameters'),
-            options: any(named: 'options'),
-            cancelToken: any(named: 'cancelToken'),
-            onSendProgress: any(named: 'onSendProgress'),
-            onReceiveProgress: any(named: 'onReceiveProgress'),
-          )).thenAnswer((_) async {
+      when(
+        () => mockDio.request<dynamic>(
+          any(),
+          data: any(named: 'data'),
+          queryParameters: any(named: 'queryParameters'),
+          options: any(named: 'options'),
+          cancelToken: any(named: 'cancelToken'),
+          onSendProgress: any(named: 'onSendProgress'),
+          onReceiveProgress: any(named: 'onReceiveProgress'),
+        ),
+      ).thenAnswer((_) async {
         await gate.future;
         return Response(
           requestOptions: RequestOptions(path: '/users'),
@@ -174,27 +180,29 @@ void main() {
     test('requestOptions is context, not identity', () async {
       // Two identical 404s from different endpoints should still compare
       // equal; RequestOptions has no value equality of its own.
-      final a = ErrorSource.notFound
-          .getFailure()
-          .withRequest(RequestOptions(path: '/a'));
-      final b = ErrorSource.notFound
-          .getFailure()
-          .withRequest(RequestOptions(path: '/b'));
+      final a = ErrorSource.notFound.getFailure().withRequest(
+        RequestOptions(path: '/a'),
+      );
+      final b = ErrorSource.notFound.getFailure().withRequest(
+        RequestOptions(path: '/b'),
+      );
 
       expect(a, equals(b));
     });
 
-    test('reports a parse failure rather than the underlying success',
-        () async {
-      stubNetwork(body: {'unexpected': 'shape'});
+    test(
+      'reports a parse failure rather than the underlying success',
+      () async {
+        stubNetwork(body: {'unexpected': 'shape'});
 
-      await api.getAs<int>(
-        endpoint: '/users',
-        parser: (data) => (data as Map)['count'] as int,
-      );
+        await api.getAs<int>(
+          endpoint: '/users',
+          parser: (data) => (data as Map)['count'] as int,
+        );
 
-      expect(observer.failures.single.errorType, ErrorSource.parseError);
-    });
+        expect(observer.failures.single.errorType, ErrorSource.parseError);
+      },
+    );
 
     test('a throwing observer does not break the request', () async {
       ApiServices.init(const ApiConfig(observer: _ExplodingObserverHolder.it));
@@ -212,9 +220,9 @@ void main() {
   group('isSuccess that throws', () {
     test('becomes a Failure, never an exception', () async {
       // A predicate written for an envelope body, meeting a 204's null body.
-      ApiServices.init(ApiConfig(
-        isSuccess: (response) => response.data['success'] == true,
-      ));
+      ApiServices.init(
+        ApiConfig(isSuccess: (response) => response.data['success'] == true),
+      );
       api = ApiServicesImplementation.instanceFor(
         dio: mockDio,
         networkInfo: mockNetworkInfo,
@@ -228,20 +236,24 @@ void main() {
           expect(failure.errorType, ErrorSource.badRequest);
           expect(failure.statusCode, 204);
         },
-        (_) => fail('A response the predicate could not confirm is not a '
-            'success'),
+        (_) => fail(
+          'A response the predicate could not confirm is not a '
+          'success',
+        ),
       );
     });
   });
 
   group('isSuccess', () {
     setUp(() {
-      ApiServices.init(ApiConfig(
-        isSuccess: (response) {
-          final data = response.data;
-          return data is! Map || data['success'] != false;
-        },
-      ));
+      ApiServices.init(
+        ApiConfig(
+          isSuccess: (response) {
+            final data = response.data;
+            return data is! Map || data['success'] != false;
+          },
+        ),
+      );
       api = ApiServicesImplementation.instanceFor(
         dio: mockDio,
         networkInfo: mockNetworkInfo,
@@ -253,17 +265,14 @@ void main() {
 
       final result = await api.post(endpoint: '/payments');
 
-      result.fold(
-        (failure) {
-          expect(failure.message, 'Insufficient funds');
-          expect(failure.data, {
-            'success': false,
-            'message': 'Insufficient funds',
-          });
-          expect(failure.statusCode, 200);
-        },
-        (_) => fail('Expected the rejected body to become a Failure'),
-      );
+      result.fold((failure) {
+        expect(failure.message, 'Insufficient funds');
+        expect(failure.data, {
+          'success': false,
+          'message': 'Insufficient funds',
+        });
+        expect(failure.statusCode, 200);
+      }, (_) => fail('Expected the rejected body to become a Failure'));
     });
 
     test('leaves an accepted 200 alone', () async {

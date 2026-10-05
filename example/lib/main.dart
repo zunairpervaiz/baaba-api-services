@@ -4,16 +4,18 @@ import 'package:flutter/material.dart';
 /// A runnable tour of the package against a public test API.
 ///
 /// Shows the pieces you would actually wire up in an app: one-time setup with
-/// [ApiConfig], typed responses, cache policies, failure handling, and the
+/// [ApiConfig], typed responses, failure handling, and the
 /// global loading indicator.
 void main() {
-  ApiServices.init(ApiConfig(
-    baseUrl: 'https://jsonplaceholder.typicode.com',
-    connectTimeout: const Duration(seconds: 15),
-    observer: ConsoleObserver(),
-    // A real app would add:
-    // auth: AuthConfig(getToken: ..., onTokenRefresh: ...),
-  ));
+  ApiServices.init(
+    ApiConfig(
+      baseUrl: 'https://jsonplaceholder.typicode.com',
+      connectTimeout: const Duration(seconds: 15),
+      observer: ConsoleObserver(),
+      // A real app would add:
+      // auth: AuthConfig(getToken: ..., onTokenRefresh: ...),
+    ),
+  );
 
   ApiServices.configureLoader(
     onShow: () => _loading.value = true,
@@ -30,7 +32,8 @@ class ConsoleObserver extends ApiObserver {
   @override
   void onFailure(Failure failure, RequestOptions? options) {
     debugPrint(
-        '[api] ${options?.method} ${options?.path} → ${failure.message}');
+      '[api] ${options?.method} ${options?.path} → ${failure.message}',
+    );
   }
 }
 
@@ -42,10 +45,10 @@ class Post {
   const Post({required this.id, required this.title, required this.body});
 
   factory Post.fromJson(Map<String, dynamic> json) => Post(
-        id: json['id'] as int,
-        title: json['title'] as String,
-        body: json['body'] as String,
-      );
+    id: json['id'] as int,
+    title: json['title'] as String,
+    body: json['body'] as String,
+  );
 }
 
 class PostRepository {
@@ -57,14 +60,12 @@ class PostRepository {
 
   PostRepository([ApiServices? api]) : _api = api ?? ApiServices.instance();
 
-  /// Typed, cached, and offline-tolerant in one call.
+  /// Typed, and cancellable by tag, in one call.
   Future<Either<Failure, List<Post>>> latest() {
     return _api.getAs<List<Post>>(
       endpoint: '/posts',
       parser: listParser(Post.fromJson),
       params: {'_limit': 20},
-      cachePolicy: CachePolicy.networkFirst,
-      cacheMaxAge: const Duration(minutes: 5),
       tag: tag,
     );
   }
@@ -147,11 +148,13 @@ class _PostsPageState extends State<PostsPage> {
         final message = fields != null
             ? fields.entries.map((e) => '${e.key}: ${e.value.first}').join('\n')
             : failure.message;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       },
-      (post) => ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Created post ${post.id}'))),
+      (post) => ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Created post ${post.id}'))),
     );
   }
 
@@ -186,7 +189,7 @@ class _PostsPageState extends State<PostsPage> {
                   // the list is empty.
                   physics: const AlwaysScrollableScrollPhysics(),
                   itemCount: _posts.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final post = _posts[index];
                     return ListTile(

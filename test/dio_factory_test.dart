@@ -63,15 +63,19 @@ void main() {
       expect(dio.options.sendTimeout, const Duration(seconds: 45));
     });
 
-    test('attaches the retry interceptor but no auth interceptor by default',
-        () {
-      final dio = dioFactory.getDio();
+    test(
+      'attaches the retry interceptor but no auth interceptor by default',
+      () {
+        final dio = dioFactory.getDio();
 
-      expect(
-          dio.interceptors.whereType<NetworkRetryInterceptor>(), hasLength(1));
-      expect(dio.interceptors.whereType<TokenRefreshInterceptor>(), isEmpty);
-      expect(dio.interceptors.whereType<ObserverInterceptor>(), isEmpty);
-    });
+        expect(
+          dio.interceptors.whereType<NetworkRetryInterceptor>(),
+          hasLength(1),
+        );
+        expect(dio.interceptors.whereType<TokenRefreshInterceptor>(), isEmpty);
+        expect(dio.interceptors.whereType<ObserverInterceptor>(), isEmpty);
+      },
+    );
 
     test('orders auth before retry so a retry carries a valid token', () {
       final dio = dioFactory.getDio(
@@ -84,12 +88,15 @@ void main() {
         ),
       );
 
-      final authIndex =
-          dio.interceptors.indexWhere((i) => i is TokenRefreshInterceptor);
-      final retryIndex =
-          dio.interceptors.indexWhere((i) => i is NetworkRetryInterceptor);
-      final observerIndex =
-          dio.interceptors.indexWhere((i) => i is ObserverInterceptor);
+      final authIndex = dio.interceptors.indexWhere(
+        (i) => i is TokenRefreshInterceptor,
+      );
+      final retryIndex = dio.interceptors.indexWhere(
+        (i) => i is NetworkRetryInterceptor,
+      );
+      final observerIndex = dio.interceptors.indexWhere(
+        (i) => i is ObserverInterceptor,
+      );
 
       expect(authIndex, isNonNegative);
       expect(authIndex, lessThan(retryIndex));
@@ -106,8 +113,7 @@ void main() {
       expect(dio.httpClientAdapter, same(adapter));
     });
 
-    test(
-        'logs the request line, request body, response body and errors '
+    test('logs the request line, request body, response body and errors '
         'by default', () {
       final dio = dioFactory.getDio();
 
@@ -177,9 +183,11 @@ void main() {
 
 class _RecordingAdapter implements HttpClientAdapter {
   @override
-  Future<ResponseBody> fetch(RequestOptions options, Stream<List<int>>? stream,
-          Future<void>? cancelFuture) async =>
-      ResponseBody.fromString('{}', 200);
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<List<int>>? stream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody.fromString('{}', 200);
 
   @override
   void close({bool force = false}) {}

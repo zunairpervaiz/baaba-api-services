@@ -4,15 +4,17 @@ import 'package:baaba_api_handler/ts_api_handler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Failure _failureFor(int statusCode, Object? body) {
-  return ErrorHandler.handle(DioException(
-    type: DioExceptionType.badResponse,
-    requestOptions: RequestOptions(path: '/test'),
-    response: Response(
-      statusCode: statusCode,
-      data: body,
+  return ErrorHandler.handle(
+    DioException(
+      type: DioExceptionType.badResponse,
       requestOptions: RequestOptions(path: '/test'),
+      response: Response(
+        statusCode: statusCode,
+        data: body,
+        requestOptions: RequestOptions(path: '/test'),
+      ),
     ),
-  )).failure;
+  ).failure;
 }
 
 void main() {
@@ -27,14 +29,16 @@ void main() {
       expect(failure.errorType, ErrorSource.unprocessableEntity);
     });
 
-    test('statusCode keeps a status the ResponseCode enum cannot represent',
-        () {
-      final failure = _failureFor(418, {'message': 'I am a teapot'});
+    test(
+      'statusCode keeps a status the ResponseCode enum cannot represent',
+      () {
+        final failure = _failureFor(418, {'message': 'I am a teapot'});
 
-      // code collapses to defaultError, but the real status survives.
-      expect(failure.code, ResponseCode.defaultError);
-      expect(failure.statusCode, 418);
-    });
+        // code collapses to defaultError, but the real status survives.
+        expect(failure.code, ResponseCode.defaultError);
+        expect(failure.statusCode, 418);
+      },
+    );
 
     test('falls back to the generic message when the body has none', () {
       final failure = _failureFor(404, {});
@@ -44,22 +48,36 @@ void main() {
     });
 
     test('is null for a failure that never reached the server', () {
-      final failure = ErrorHandler.handle(DioException(
-        type: DioExceptionType.connectionTimeout,
-        requestOptions: RequestOptions(path: '/test'),
-      )).failure;
+      final failure = ErrorHandler.handle(
+        DioException(
+          type: DioExceptionType.connectionTimeout,
+          requestOptions: RequestOptions(path: '/test'),
+        ),
+      ).failure;
 
       expect(failure.data, isNull);
       expect(failure.statusCode, isNull);
     });
 
     test('equality accounts for the payload', () {
-      const a = Failure(ErrorSource.badRequest, ResponseCode.badRequest, 'x',
-          statusCode: 400);
-      const b = Failure(ErrorSource.badRequest, ResponseCode.badRequest, 'x',
-          statusCode: 400);
-      const c = Failure(ErrorSource.badRequest, ResponseCode.badRequest, 'x',
-          statusCode: 409);
+      const a = Failure(
+        ErrorSource.badRequest,
+        ResponseCode.badRequest,
+        'x',
+        statusCode: 400,
+      );
+      const b = Failure(
+        ErrorSource.badRequest,
+        ResponseCode.badRequest,
+        'x',
+        statusCode: 400,
+      );
+      const c = Failure(
+        ErrorSource.badRequest,
+        ResponseCode.badRequest,
+        'x',
+        statusCode: 409,
+      );
 
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
@@ -89,14 +107,16 @@ void main() {
     });
 
     test('tolerates a junk errors payload without throwing', () {
-      expect(_failureFor(422, {'errors': 'not an object'}).validationErrors,
-          isNull);
+      expect(
+        _failureFor(422, {'errors': 'not an object'}).validationErrors,
+        isNull,
+      );
       expect(
         _failureFor(422, {
-          'errors': {'field': 42}
+          'errors': {'field': 42},
         }).validationErrors,
         {
-          'field': ['42']
+          'field': ['42'],
         },
       );
     });
@@ -108,8 +128,10 @@ void main() {
     });
 
     test('prefers message, then detail, then error', () {
-      expect(extractErrorMessage({'message': 'a', 'detail': 'b', 'error': 'c'}),
-          'a');
+      expect(
+        extractErrorMessage({'message': 'a', 'detail': 'b', 'error': 'c'}),
+        'a',
+      );
       expect(extractErrorMessage({'detail': 'b', 'error': 'c'}), 'b');
       expect(extractErrorMessage({'error': 'c'}), 'c');
     });
@@ -117,7 +139,7 @@ void main() {
     test('follows one level into a nested object', () {
       expect(
         extractErrorMessage({
-          'error': {'message': 'Email already taken'}
+          'error': {'message': 'Email already taken'},
         }),
         'Email already taken',
       );
@@ -126,7 +148,7 @@ void main() {
     test('joins a list of messages', () {
       expect(
         extractErrorMessage({
-          'detail': ['first problem', 'second problem']
+          'detail': ['first problem', 'second problem'],
         }),
         'first problem second problem',
       );
@@ -143,10 +165,44 @@ void main() {
       // What nginx or Cloudflare send for a 502 — not for a snackbar.
       expect(
         extractErrorMessage(
-            '<html><body><h1>502 Bad Gateway</h1></body></html>'),
+          '<html><body><h1>502 Bad Gateway</h1></body></html>',
+        ),
         isEmpty,
       );
       expect(extractErrorMessage('\n  <!DOCTYPE html><html></html>'), isEmpty);
+    });
+
+    test('reads a FastAPI/Pydantic list of error objects', () {
+      expect(
+        extractErrorMessage({
+          'detail': [
+            {
+              'loc': ['body', 'email'],
+              'msg': 'field required',
+              'type': 'missing',
+            },
+            {
+              'loc': ['body', 'name'],
+              'msg': 'too short',
+            },
+          ],
+        }),
+        'field required too short',
+      );
+    });
+
+    test('decodes a JSON body that arrived as a string', () {
+      // responseType: plain leaves the error body undecoded.
+      expect(
+        extractErrorMessage('{"message": "Email already taken"}'),
+        'Email already taken',
+      );
+      expect(extractErrorMessage('  {"detail": "Locked"}  '), 'Locked');
+      expect(extractErrorMessage('{"unrelated": 1}'), isEmpty);
+    });
+
+    test('a string that only looks like JSON is kept as text', () {
+      expect(extractErrorMessage('{not json}'), '{not json}');
     });
 
     test('skips flags and blanks for a key that carries a message', () {

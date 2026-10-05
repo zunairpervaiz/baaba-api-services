@@ -1,5 +1,4 @@
 import 'package:baaba_api_handler/src/config/auth_config.dart';
-import 'package:baaba_api_handler/src/config/cache_policy.dart';
 import 'package:baaba_api_handler/src/config/retry_policy.dart';
 import 'package:baaba_api_handler/src/observer/api_observer.dart';
 import 'package:baaba_api_handler/src/utils/api_log_options.dart';
@@ -122,69 +121,6 @@ class ApiConfig {
   /// retries off entirely.
   final RetryPolicy retry;
 
-  /// Master switch for response caching.
-  ///
-  /// Set to `false` and **no request can cache, whatever it asks for** — an
-  /// explicit `cachePolicy` on an individual call is downgraded to
-  /// [CachePolicy.networkOnly]. Nothing is read from or written to disk, and
-  /// the cache database is never opened.
-  ///
-  /// This is for projects where caching responses is not merely unwanted but
-  /// not allowed — anything handling payment, health, or identity data, where
-  /// "no response body is persisted to disk" is a requirement rather than a
-  /// preference. Leaving it `true` and simply not passing a `cachePolicy` also
-  /// results in no caching, but it relies on every call site getting it right;
-  /// this does not.
-  final bool cacheEnabled;
-
-  /// The [CachePolicy] used by `get`/`getAs` when the call site doesn't name
-  /// one.
-  ///
-  /// Defaults to [CachePolicy.networkOnly] — no caching, the 1.x behaviour.
-  /// Set it to make caching the norm for a project without annotating every
-  /// call:
-  ///
-  /// ```dart
-  /// // Every GET tolerates going offline; individual calls can still opt out
-  /// // with `cachePolicy: CachePolicy.networkOnly`.
-  /// ApiServices.init(const ApiConfig(
-  ///   defaultCachePolicy: CachePolicy.networkFirst,
-  /// ));
-  /// ```
-  ///
-  /// Ignored entirely when [cacheEnabled] is `false`.
-  final CachePolicy defaultCachePolicy;
-
-  /// Caps how many entries the response cache keeps. `null` is unbounded.
-  ///
-  /// Without a bound the cache only ever grows: every distinct url and query
-  /// combination adds a row that nothing removes, and `cacheMaxAge` does not
-  /// help — it discards a stale entry when something reads it, so a key that
-  /// is never requested again is never reclaimed.
-  ///
-  /// When a write pushes the cache past the cap, the oldest entries are
-  /// deleted until it fits. "Oldest" is by write time, not by last read:
-  /// tracking reads would mean a disk write on every cache *hit*, which would
-  /// cost more than the eviction saves.
-  final int? cacheMaxEntries;
-
-  /// Caps the total size of cached response bodies, in bytes. `null` is
-  /// unbounded.
-  ///
-  /// Applied alongside [cacheMaxEntries] — whichever binds first — and evicts
-  /// oldest-first the same way. A single response larger than this is still
-  /// stored; the cap governs the total, and refusing to cache a large body
-  /// would fail silently in a way that is very hard to notice.
-  ///
-  /// ```dart
-  /// // Keep the cache to roughly 500 entries or 5 MB, whichever comes first.
-  /// ApiServices.init(const ApiConfig(
-  ///   cacheMaxEntries: 500,
-  ///   cacheMaxBytes: 5 * 1024 * 1024,
-  /// ));
-  /// ```
-  final int? cacheMaxBytes;
-
   /// Decides whether a `2xx` response actually represents success.
   ///
   /// Some APIs answer `200 OK` with `{"success": false, "message": "..."}`.
@@ -192,6 +128,9 @@ class ApiConfig {
   /// body. Return `false` and the package converts the response into a
   /// `Failure`, extracting the message from the body the same way it does for
   /// a real error response.
+  ///
+  /// Not applied to `head()` or `download()`: neither has a body in
+  /// `response.data` to judge.
   ///
   /// ```dart
   /// isSuccess: (response) {
@@ -284,8 +223,8 @@ class ApiConfig {
   /// ```
   ///
   /// Requests past the cap queue in the order they were made and start as
-  /// slots free up. The cap governs actual network calls: a cache hit and a
-  /// request collapsed by de-duplication do not consume a slot. A queued
+  /// slots free up. The cap governs actual network calls: a request
+  /// collapsed by de-duplication does not consume a slot of its own. A queued
   /// request is still cancellable, and still holds the loading indicator —
   /// it is pending, not finished.
   ///
@@ -308,10 +247,6 @@ class ApiConfig {
     this.connectivityProbe,
     this.logging = const ApiLogOptions(),
     this.retry = const RetryPolicy(),
-    this.cacheEnabled = true,
-    this.defaultCachePolicy = CachePolicy.networkOnly,
-    this.cacheMaxEntries,
-    this.cacheMaxBytes,
     this.isSuccess,
     this.onRejected,
     this.httpClientAdapter,
@@ -320,10 +255,10 @@ class ApiConfig {
     this.maxConcurrentRequests,
     this.auth,
   }) : assert(
-          maxConcurrentRequests == null || maxConcurrentRequests > 0,
-          'maxConcurrentRequests must be positive, or null for no cap — '
-          'a cap of 0 would queue every request forever.',
-        );
+         maxConcurrentRequests == null || maxConcurrentRequests > 0,
+         'maxConcurrentRequests must be positive, or null for no cap — '
+         'a cap of 0 would queue every request forever.',
+       );
 
   /// Returns a copy with the given fields replaced.
   ///
@@ -346,10 +281,6 @@ class ApiConfig {
     Future<bool> Function()? connectivityProbe,
     ApiLogOptions? logging,
     RetryPolicy? retry,
-    bool? cacheEnabled,
-    CachePolicy? defaultCachePolicy,
-    int? cacheMaxEntries,
-    int? cacheMaxBytes,
     bool Function(Response response)? isSuccess,
     Failure? Function(Response response)? onRejected,
     HttpClientAdapter? httpClientAdapter,
@@ -370,10 +301,6 @@ class ApiConfig {
       connectivityProbe: connectivityProbe ?? this.connectivityProbe,
       logging: logging ?? this.logging,
       retry: retry ?? this.retry,
-      cacheEnabled: cacheEnabled ?? this.cacheEnabled,
-      defaultCachePolicy: defaultCachePolicy ?? this.defaultCachePolicy,
-      cacheMaxEntries: cacheMaxEntries ?? this.cacheMaxEntries,
-      cacheMaxBytes: cacheMaxBytes ?? this.cacheMaxBytes,
       isSuccess: isSuccess ?? this.isSuccess,
       onRejected: onRejected ?? this.onRejected,
       httpClientAdapter: httpClientAdapter ?? this.httpClientAdapter,

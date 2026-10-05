@@ -28,15 +28,17 @@ void main() {
     registerFallbackValue(Options());
     when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => true);
 
-    when(() => mockDio.request<dynamic>(
-          any(),
-          data: any(named: 'data'),
-          queryParameters: any(named: 'queryParameters'),
-          options: any(named: 'options'),
-          cancelToken: any(named: 'cancelToken'),
-          onSendProgress: any(named: 'onSendProgress'),
-          onReceiveProgress: any(named: 'onReceiveProgress'),
-        )).thenAnswer((invocation) async {
+    when(
+      () => mockDio.request<dynamic>(
+        any(),
+        data: any(named: 'data'),
+        queryParameters: any(named: 'queryParameters'),
+        options: any(named: 'options'),
+        cancelToken: any(named: 'cancelToken'),
+        onSendProgress: any(named: 'onSendProgress'),
+        onReceiveProgress: any(named: 'onReceiveProgress'),
+      ),
+    ).thenAnswer((invocation) async {
       calls.add(invocation);
       return Response(
         requestOptions: RequestOptions(path: '/upload'),
@@ -110,8 +112,10 @@ void main() {
       ],
     );
 
-    expect(sentOptions().headers!['content-type'],
-        'multipart/related; boundary=xyz');
+    expect(
+      sentOptions().headers!['content-type'],
+      'multipart/related; boundary=xyz',
+    );
   });
 
   test('leaves headers alone for a non-multipart body', () async {
@@ -139,25 +143,27 @@ void main() {
     expect(headers[accept], applicationJson);
   });
 
-  test('keeps content-type parameters instead of mangling the subtype',
-      () async {
-    await api.upload(
-      endpoint: '/documents',
-      files: [
-        UploadFile.fromBytes(
-          field: 'f',
-          bytes: [1],
-          filename: 'a.csv',
-          contentType: 'text/csv; charset=utf-8',
-        ),
-      ],
-    );
+  test(
+    'keeps content-type parameters instead of mangling the subtype',
+    () async {
+      await api.upload(
+        endpoint: '/documents',
+        files: [
+          UploadFile.fromBytes(
+            field: 'f',
+            bytes: [1],
+            filename: 'a.csv',
+            contentType: 'text/csv; charset=utf-8',
+          ),
+        ],
+      );
 
-    final sent = sentFormData().files.single.value.contentType!;
-    expect(sent.type, 'text');
-    expect(sent.subtype, 'csv');
-    expect(sent.parameters['charset'], 'utf-8');
-  });
+      final sent = sentFormData().files.single.value.contentType!;
+      expect(sent.type, 'text');
+      expect(sent.subtype, 'csv');
+      expect(sent.parameters['charset'], 'utf-8');
+    },
+  );
 
   test('an unparseable content-type falls back to inference', () async {
     await api.upload(
@@ -174,7 +180,9 @@ void main() {
 
     // Dio infers from the filename rather than the upload failing.
     expect(
-        sentFormData().files.single.value.contentType?.mimeType, 'image/png');
+      sentFormData().files.single.value.contentType?.mimeType,
+      'image/png',
+    );
   });
 
   test('defaults to POST and honours an explicit method', () async {
@@ -232,10 +240,7 @@ void main() {
   test('skips the request entirely when offline', () async {
     when(() => mockNetworkInfo.isConnected).thenAnswer((_) async => false);
 
-    final result = await api.upload(
-      endpoint: '/documents',
-      fields: {'a': '1'},
-    );
+    final result = await api.upload(endpoint: '/documents', fields: {'a': '1'});
 
     result.fold(
       (failure) => expect(failure.errorType, ErrorSource.noInternetConnection),
@@ -272,9 +277,10 @@ void main() {
       ],
     );
 
-    expect(
-      sentFormData().files.map((e) => '${e.key}:${e.value.filename}'),
-      ['images:a.png', 'images:b.png', 'cover:c.png'],
-    );
+    expect(sentFormData().files.map((e) => '${e.key}:${e.value.filename}'), [
+      'images:a.png',
+      'images:b.png',
+      'cover:c.png',
+    ]);
   });
 }

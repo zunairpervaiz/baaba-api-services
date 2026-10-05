@@ -12,9 +12,14 @@ import 'package:flutter_test/flutter_test.dart';
 class _ScriptedAdapter implements HttpClientAdapter {
   final List<int> statuses;
   final Map<String, String> headers;
+  final Map<String, List<String>> multiHeaders;
   int callCount = 0;
 
-  _ScriptedAdapter(this.statuses, {this.headers = const {}});
+  _ScriptedAdapter(
+    this.statuses, {
+    this.headers = const {},
+    this.multiHeaders = const {},
+  });
 
   @override
   Future<ResponseBody> fetch(
@@ -24,6 +29,8 @@ class _ScriptedAdapter implements HttpClientAdapter {
   ) async {
     final index = callCount;
     callCount++;
+    // A real adapter reads the body; a second read of a spent stream throws.
+    if (requestStream != null) await requestStream.drain<void>();
 
     final status = index < statuses.length ? statuses[index] : 200;
     if (status == -1) {
@@ -39,6 +46,7 @@ class _ScriptedAdapter implements HttpClientAdapter {
       headers: {
         Headers.contentTypeHeader: [Headers.jsonContentType],
         for (final entry in headers.entries) entry.key: [entry.value],
+        ...multiHeaders,
       },
     );
   }
@@ -49,8 +57,9 @@ class _ScriptedAdapter implements HttpClientAdapter {
 
 Dio _dioWith(RetryPolicy policy, _ScriptedAdapter adapter, {Random? random}) {
   final dio = Dio(BaseOptions(baseUrl: 'https://example.com'));
-  dio.interceptors
-      .add(NetworkRetryInterceptor(dio: dio, policy: policy, random: random));
+  dio.interceptors.add(
+    NetworkRetryInterceptor(dio: dio, policy: policy, random: random),
+  );
   dio.httpClientAdapter = adapter;
   return dio;
 }
@@ -81,14 +90,16 @@ void main() {
       expect(adapter.callCount, 2);
     });
 
-    test('does NOT retry a 500 on POST — it may already have been processed',
-        () async {
-      final adapter = _ScriptedAdapter([500]);
-      final dio = _dioWith(_fast, adapter);
+    test(
+      'does NOT retry a 500 on POST — it may already have been processed',
+      () async {
+        final adapter = _ScriptedAdapter([500]);
+        final dio = _dioWith(_fast, adapter);
 
-      await expectLater(dio.post('/orders'), throwsA(isA<DioException>()));
-      expect(adapter.callCount, 1);
-    });
+        await expectLater(dio.post('/orders'), throwsA(isA<DioException>()));
+        expect(adapter.callCount, 1);
+      },
+    );
 
     test('does retry a 500 on GET', () async {
       final adapter = _ScriptedAdapter([500]);
@@ -125,6 +136,27 @@ void main() {
       expect(adapter.callCount, 1);
     });
 
+    test('a throwing veto means no retry, and keeps the real error', () async {
+      final adapter = _ScriptedAdapter([503]);
+      final dio = _dioWith(
+        RetryPolicy(
+          baseDelay: const Duration(milliseconds: 1),
+          useJitter: false,
+          retryIf: (_, _) => throw StateError('broken predicate'),
+        ),
+        adapter,
+      );
+
+      final error = await dio
+          .get('/users')
+          .then<DioException?>((_) => null)
+          .catchError((Object e) => e as DioException);
+
+      expect(error!.type, DioExceptionType.badResponse);
+      expect(error.response?.statusCode, 503);
+      expect(adapter.callCount, 1);
+    });
+
     test('receives the 1-based attempt number', () async {
       final attempts = <int>[];
       final adapter = _ScriptedAdapter([503, 503, 503]);
@@ -153,6 +185,38 @@ void main() {
 
       await expectLater(dio.get('/users'), throwsA(isA<DioException>()));
       expect(adapter.callCount, 1);
+    });
+  });
+
+  group('stream bodies', () {
+    test('are not retried, and the real error survives', () async {
+      final adapter = _ScriptedAdapter([503]);
+      final dio = _dioWith(_fast, adapter);
+
+      final error = await dio
+          .post<dynamic>(
+            '/upload',
+            data: Stream.fromIterable([
+              [1, 2, 3],
+            ]),
+            options: Options(headers: {Headers.contentLengthHeader: 3}),
+          )
+          .then<DioException?>((_) => null)
+          .catchError((Object e) => e as DioException);
+
+      expect(error!.type, DioExceptionType.badResponse);
+      expect(error.response?.statusCode, 503);
+      expect(adapter.callCount, 1);
+    });
+
+    test('bytes are still retried', () async {
+      final adapter = _ScriptedAdapter([503]);
+      final dio = _dioWith(_fast, adapter);
+
+      final response = await dio.post<dynamic>('/upload', data: [1, 2, 3]);
+
+      expect(response.statusCode, 200);
+      expect(adapter.callCount, 2);
     });
   });
 
@@ -191,8 +255,10 @@ void main() {
     test('an absurdly large value waits maxDelay, not zero', () async {
       // 10^13 seconds overflows Duration's microsecond count and wraps
       // negative, which slipped under the maxDelay clamp: retry at once.
-      final adapter =
-          _ScriptedAdapter([503], headers: {'retry-after': '10000000000000'});
+      final adapter = _ScriptedAdapter(
+        [503],
+        headers: {'retry-after': '10000000000000'},
+      );
       final dio = _dioWith(
         const RetryPolicy(maxDelay: Duration(milliseconds: 300)),
         adapter,
@@ -207,8 +273,46 @@ void main() {
     });
 
     test('ignores an unparseable header and falls back to backoff', () async {
-      final adapter =
-          _ScriptedAdapter([503], headers: {'retry-after': 'soon-ish'});
+      final adapter = _ScriptedAdapter(
+        [503],
+        headers: {'retry-after': 'soon-ish'},
+      );
+      final dio = _dioWith(_fast, adapter);
+
+      final response = await dio.get('/users');
+
+      expect(response.statusCode, 200);
+      expect(adapter.callCount, 2);
+    });
+
+    test('a negative value is invalid and falls back to backoff', () async {
+      final adapter = _ScriptedAdapter([503], headers: {'retry-after': '-5'});
+      final dio = _dioWith(
+        const RetryPolicy(
+          baseDelay: Duration(milliseconds: 300),
+          useJitter: false,
+        ),
+        adapter,
+      );
+
+      final stopwatch = Stopwatch()..start();
+      await dio.get('/users');
+      stopwatch.stop();
+
+      // Read as "zero", it retried at once instead of backing off.
+      expect(stopwatch.elapsedMilliseconds, greaterThanOrEqualTo(250));
+      expect(adapter.callCount, 2);
+    });
+
+    test('a repeated header still retries rather than erroring', () async {
+      // Headers.value() throws when a header appears twice, which turned the
+      // 503 into an `unknown` error with no status.
+      final adapter = _ScriptedAdapter(
+        [503],
+        multiHeaders: {
+          'retry-after': ['0', '0'],
+        },
+      );
       final dio = _dioWith(_fast, adapter);
 
       final response = await dio.get('/users');
@@ -281,22 +385,29 @@ void main() {
 
   group('backoff arithmetic', () {
     test('a very large retry count still completes', () {
-      // The exponential term reaches 2^49 here. Duration's operator* rounds a
-      // double into its microsecond count, which saturates rather than
-      // throwing, and _clamp brings it back to maxDelay — so no guard against
-      // the magnitude is needed. Pinned because it is not obvious.
-      final adapter = _ScriptedAdapter(List.filled(60, -1));
+      // The exponential term passes 2^63 microseconds at attempt 64, where an
+      // integer Duration wrapped negative: the clamp let it through and the
+      // jitter's nextInt threw. Jitter is on (the default) to cover that.
+      final adapter = _ScriptedAdapter(List.filled(80, -1));
       final dio = _dioWith(
         const RetryPolicy(
-          maxRetries: 50,
+          maxRetries: 70,
           baseDelay: Duration(milliseconds: 500),
           maxDelay: Duration(milliseconds: 1),
         ),
         adapter,
       );
 
-      return expectLater(dio.get('/users'), throwsA(isA<DioException>()))
-          .then((_) => expect(adapter.callCount, 51));
+      return expectLater(
+        dio.get('/users'),
+        throwsA(
+          isA<DioException>().having(
+            (e) => e.type,
+            'type',
+            DioExceptionType.connectionError,
+          ),
+        ),
+      ).then((_) => expect(adapter.callCount, 71));
     });
 
     test('a zero baseDelay retries immediately', () {
@@ -335,8 +446,10 @@ void main() {
 
     test('throws on junk rather than returning a half-parsed value', () {
       expect(() => HttpDate.parse('tomorrow'), throwsFormatException);
-      expect(() => HttpDate.parse('Wed, 21 Foo 2015 07:28:00 GMT'),
-          throwsFormatException);
+      expect(
+        () => HttpDate.parse('Wed, 21 Foo 2015 07:28:00 GMT'),
+        throwsFormatException,
+      );
     });
   });
 

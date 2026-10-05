@@ -38,15 +38,17 @@ void main() {
 
     // Every call parks on `gate`, so two requests are genuinely in flight at
     // the same time — which is the only situation de-duplication applies to.
-    when(() => mockDio.request<dynamic>(
-          any(),
-          data: any(named: 'data'),
-          queryParameters: any(named: 'queryParameters'),
-          options: any(named: 'options'),
-          cancelToken: any(named: 'cancelToken'),
-          onSendProgress: any(named: 'onSendProgress'),
-          onReceiveProgress: any(named: 'onReceiveProgress'),
-        )).thenAnswer((_) async {
+    when(
+      () => mockDio.request<dynamic>(
+        any(),
+        data: any(named: 'data'),
+        queryParameters: any(named: 'queryParameters'),
+        options: any(named: 'options'),
+        cancelToken: any(named: 'cancelToken'),
+        onSendProgress: any(named: 'onSendProgress'),
+        onReceiveProgress: any(named: 'onReceiveProgress'),
+      ),
+    ).thenAnswer((_) async {
       networkCalls++;
       await gate.future;
       return Response(
@@ -136,27 +138,26 @@ void main() {
     expect(networkCalls, 2);
   });
 
-  test('the loader shows once and hides once for a de-duplicated pair',
-      () async {
-    var shows = 0;
-    var hides = 0;
-    ApiServices.configureLoader(
-      onShow: () => shows++,
-      onHide: () => hides++,
-    );
+  test(
+    'the loader shows once and hides once for a de-duplicated pair',
+    () async {
+      var shows = 0;
+      var hides = 0;
+      ApiServices.configureLoader(onShow: () => shows++, onHide: () => hides++);
 
-    final both = Future.wait([
-      api.get(endpoint: '/users'),
-      api.get(endpoint: '/users'),
-    ]);
-    gate.complete();
-    await both;
+      final both = Future.wait([
+        api.get(endpoint: '/users'),
+        api.get(endpoint: '/users'),
+      ]);
+      gate.complete();
+      await both;
 
-    // Reference counting is per caller, not per network call — otherwise the
-    // second caller's hide would fire while the first still waits.
-    expect(shows, 1);
-    expect(hides, 1);
-  });
+      // Reference counting is per caller, not per network call — otherwise the
+      // second caller's hide would fire while the first still waits.
+      expect(shows, 1);
+      expect(hides, 1);
+    },
+  );
 
   test('the loader is counted globally, not per client', () async {
     // The callbacks are static because the indicator is one global widget, so
@@ -197,15 +198,17 @@ void main() {
   });
 
   test('both callers see the same failure', () async {
-    when(() => mockDio.request<dynamic>(
-          any(),
-          data: any(named: 'data'),
-          queryParameters: any(named: 'queryParameters'),
-          options: any(named: 'options'),
-          cancelToken: any(named: 'cancelToken'),
-          onSendProgress: any(named: 'onSendProgress'),
-          onReceiveProgress: any(named: 'onReceiveProgress'),
-        )).thenAnswer((_) async {
+    when(
+      () => mockDio.request<dynamic>(
+        any(),
+        data: any(named: 'data'),
+        queryParameters: any(named: 'queryParameters'),
+        options: any(named: 'options'),
+        cancelToken: any(named: 'cancelToken'),
+        onSendProgress: any(named: 'onSendProgress'),
+        onReceiveProgress: any(named: 'onReceiveProgress'),
+      ),
+    ).thenAnswer((_) async {
       networkCalls++;
       await gate.future;
       throw DioException(
@@ -282,8 +285,11 @@ void main() {
 
       final result = await api.get(endpoint: '/users');
 
-      expect(result.isRight(), isTrue,
-          reason: 'onHide runs in a finally, so its throw replaced the result');
+      expect(
+        result.isRight(),
+        isTrue,
+        reason: 'onHide runs in a finally, so its throw replaced the result',
+      );
     });
   });
 
@@ -344,7 +350,7 @@ void main() {
       // progress bar would never move.
       await expectSeparate([
         api.get(endpoint: '/report'),
-        api.get(endpoint: '/report', onReceiveProgress: (_, __) {}),
+        api.get(endpoint: '/report', onReceiveProgress: (_, _) {}),
       ]);
     });
   });

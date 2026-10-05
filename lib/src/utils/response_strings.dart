@@ -21,6 +21,8 @@ class ResponseStrings {
   static const String badGateway = 'Bad gateway. Please try again later.';
   static const String serviceNotAvailable =
       'Service temporarily unavailable. Please try again later.';
+  static const String gatewayTimeout =
+      'The server took too long to respond. Please try again later.';
   static const String connectTimeout =
       'Connection timed out. Please check your network.';
   static const String receiveTimeout =
@@ -28,7 +30,6 @@ class ResponseStrings {
   static const String sendTimeout =
       'The request took too long to send. Please try again.';
   static const String cancel = 'The request was cancelled.';
-  static const String cacheError = 'Failed to read from cache.';
   static const String noInternetConnection =
       'No internet connection. Please check your network.';
   static const String connectionFailure =

@@ -25,10 +25,13 @@ class _Adapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     requests.add(options);
-    return ResponseBody.fromString('{}', status?.call(options) ?? 200,
-        headers: {
-          Headers.contentTypeHeader: [Headers.jsonContentType],
-        });
+    return ResponseBody.fromString(
+      '{}',
+      status?.call(options) ?? 200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
   }
 
   String? authFor(String host) =>
@@ -52,19 +55,21 @@ void main() {
     Future<bool> Function()? onTokenRefresh,
     void Function()? onRefreshFailed,
   }) {
-    ApiServices.init(ApiConfig(
-      baseUrl: baseUrl,
-      bypassConnectivityCheck: true,
-      httpClientAdapter: adapter,
-      retry: const RetryPolicy.disabled(),
-      logging: const ApiLogOptions(enabled: false),
-      auth: AuthConfig(
-        getToken: () async => 'SECRET',
-        onTokenRefresh: onTokenRefresh ?? () async => true,
-        onRefreshFailed: onRefreshFailed,
-        sendTokenTo: sendTokenTo,
+    ApiServices.init(
+      ApiConfig(
+        baseUrl: baseUrl,
+        bypassConnectivityCheck: true,
+        httpClientAdapter: adapter,
+        retry: const RetryPolicy.disabled(),
+        logging: const ApiLogOptions(enabled: false),
+        auth: AuthConfig(
+          getToken: () async => 'SECRET',
+          onTokenRefresh: onTokenRefresh ?? () async => true,
+          onRefreshFailed: onRefreshFailed,
+          sendTokenTo: sendTokenTo,
+        ),
       ),
-    ));
+    );
   }
 
   group('by default, only the baseUrl host receives the token', () {
@@ -99,11 +104,15 @@ void main() {
       final adapter = _Adapter();
       init(adapter);
 
-      await ApiServices.instance()
-          .get(endpoint: 'https://cdn.mycompany.com/assets/logo.png');
+      await ApiServices.instance().get(
+        endpoint: 'https://cdn.mycompany.com/assets/logo.png',
+      );
 
-      expect(adapter.authFor('cdn.mycompany.com'), isNull,
-          reason: 'use sendTokenTo to opt a sibling host in');
+      expect(
+        adapter.authFor('cdn.mycompany.com'),
+        isNull,
+        reason: 'use sendTokenTo to opt a sibling host in',
+      );
     });
 
     test('uploads and downloads are scoped too', () async {
@@ -151,8 +160,11 @@ void main() {
 
       await ApiServices.instance().get(endpoint: '/me');
 
-      expect(adapter.authFor('api.mycompany.com'), isNull,
-          reason: 'a broken check must not leak the token');
+      expect(
+        adapter.authFor('api.mycompany.com'),
+        isNull,
+        reason: 'a broken check must not leak the token',
+      );
     });
   });
 
@@ -171,10 +183,13 @@ void main() {
     test('does not trigger a token refresh', () async {
       var refreshes = 0;
       final adapter = _Adapter(status: (_) => 401);
-      init(adapter, onTokenRefresh: () async {
-        refreshes++;
-        return true;
-      });
+      init(
+        adapter,
+        onTokenRefresh: () async {
+          refreshes++;
+          return true;
+        },
+      );
 
       await ApiServices.instance().get(endpoint: _s3);
 
@@ -204,10 +219,13 @@ void main() {
       final adapter = _Adapter(
         status: (options) => options.extra['_tokenRetried'] == true ? 200 : 401,
       );
-      init(adapter, onTokenRefresh: () async {
-        refreshes++;
-        return true;
-      });
+      init(
+        adapter,
+        onTokenRefresh: () async {
+          refreshes++;
+          return true;
+        },
+      );
 
       final result = await ApiServices.instance().get(endpoint: '/me');
 

@@ -12,11 +12,11 @@ void main() {
       expect(ResponseCode.forbidden.value, 403);
       expect(ResponseCode.notFound.value, 404);
       expect(ResponseCode.internalServerError.value, 500);
+      expect(ResponseCode.gatewayTimeout.value, 504);
       expect(ResponseCode.connectTimeout.value, -1);
       expect(ResponseCode.cancel.value, -2);
       expect(ResponseCode.receiveTimeout.value, -3);
       expect(ResponseCode.sendTimeout.value, -4);
-      expect(ResponseCode.cacheError.value, -5);
       expect(ResponseCode.noInternetConnection.value, -6);
       expect(ResponseCode.defaultError.value, -7);
       expect(ResponseCode.connectionFailure.value, -8);
@@ -31,11 +31,15 @@ void main() {
       expect(mapStatusCodeToEnum(403), ResponseCode.forbidden);
       expect(mapStatusCodeToEnum(404), ResponseCode.notFound);
       expect(mapStatusCodeToEnum(500), ResponseCode.internalServerError);
+      expect(mapStatusCodeToEnum(502), ResponseCode.badGateway);
+      expect(mapStatusCodeToEnum(503), ResponseCode.serviceNotAvailable);
+      expect(mapStatusCodeToEnum(504), ResponseCode.gatewayTimeout);
       expect(mapStatusCodeToEnum(-1), ResponseCode.connectTimeout);
       expect(mapStatusCodeToEnum(-2), ResponseCode.cancel);
       expect(mapStatusCodeToEnum(-3), ResponseCode.receiveTimeout);
       expect(mapStatusCodeToEnum(-4), ResponseCode.sendTimeout);
-      expect(mapStatusCodeToEnum(-5), ResponseCode.cacheError);
+      // -5 was cacheError; retired, not reused.
+      expect(mapStatusCodeToEnum(-5), ResponseCode.defaultError);
       expect(mapStatusCodeToEnum(-6), ResponseCode.noInternetConnection);
       expect(mapStatusCodeToEnum(-7), ResponseCode.defaultError);
       expect(mapStatusCodeToEnum(-8), ResponseCode.connectionFailure);

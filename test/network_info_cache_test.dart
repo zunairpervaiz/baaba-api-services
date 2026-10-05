@@ -78,10 +78,12 @@ void main() {
 
     test('recovers immediately when connectivity returns', () async {
       var connected = false;
-      final info = build(probe: () async {
-        probeCount++;
-        return connected;
-      });
+      final info = build(
+        probe: () async {
+          probeCount++;
+          return connected;
+        },
+      );
 
       expect(await info.isConnected, isFalse);
       connected = true;
@@ -90,10 +92,12 @@ void main() {
 
     test('concurrent callers share one in-flight probe', () async {
       final gate = Completer<bool>();
-      final info = build(probe: () {
-        probeCount++;
-        return gate.future;
-      });
+      final info = build(
+        probe: () {
+          probeCount++;
+          return gate.future;
+        },
+      );
 
       final results = Future.wait([
         info.isConnected,
@@ -107,10 +111,12 @@ void main() {
     });
 
     test('a probe that throws reads as offline rather than escaping', () async {
-      final info = build(probe: () async {
-        probeCount++;
-        throw StateError('probe exploded');
-      });
+      final info = build(
+        probe: () async {
+          probeCount++;
+          throw StateError('probe exploded');
+        },
+      );
 
       expect(await info.isConnected, isFalse);
     });
@@ -120,11 +126,13 @@ void main() {
       // even assigned. If the slot is not cleared afterwards, a stale
       // completed future reports offline for the rest of the session.
       var explode = true;
-      final info = build(probe: () {
-        probeCount++;
-        if (explode) throw StateError('probe exploded synchronously');
-        return Future.value(true);
-      });
+      final info = build(
+        probe: () {
+          probeCount++;
+          if (explode) throw StateError('probe exploded synchronously');
+          return Future.value(true);
+        },
+      );
 
       expect(await info.isConnected, isFalse);
 

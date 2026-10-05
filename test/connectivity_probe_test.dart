@@ -14,9 +14,13 @@ class _OkAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     calls++;
-    return ResponseBody.fromString('{"ok":true}', 200, headers: {
-      Headers.contentTypeHeader: [Headers.jsonContentType],
-    });
+    return ResponseBody.fromString(
+      '{"ok":true}',
+      200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
   }
 
   @override
@@ -31,23 +35,28 @@ void main() {
     required Future<bool> Function() probe,
     Duration ttl = Duration.zero,
   }) {
-    ApiServices.init(ApiConfig(
-      baseUrl: 'https://api.test',
-      httpClientAdapter: adapter,
-      connectivityProbe: probe,
-      connectivityCacheTtl: ttl,
-      retry: const RetryPolicy.disabled(),
-      logging: const ApiLogOptions(enabled: false),
-    ));
+    ApiServices.init(
+      ApiConfig(
+        baseUrl: 'https://api.test',
+        httpClientAdapter: adapter,
+        connectivityProbe: probe,
+        connectivityCacheTtl: ttl,
+        retry: const RetryPolicy.disabled(),
+        logging: const ApiLogOptions(enabled: false),
+      ),
+    );
   }
 
   test('a custom probe replaces the default third-party ping', () async {
     var probed = 0;
     final adapter = _OkAdapter();
-    init(adapter, probe: () async {
-      probed++;
-      return true;
-    });
+    init(
+      adapter,
+      probe: () async {
+        probed++;
+        return true;
+      },
+    );
 
     final result = await ApiServices.instance().get(endpoint: '/users');
 
@@ -60,9 +69,9 @@ void main() {
     final adapter = _OkAdapter();
     init(adapter, probe: () async => false);
 
-    final failure = (await ApiServices.instance().get(endpoint: '/users'))
-        .getLeft()
-        .toNullable()!;
+    final failure = (await ApiServices.instance().get(
+      endpoint: '/users',
+    )).getLeft().toNullable()!;
 
     expect(failure.errorType, ErrorSource.noInternetConnection);
     expect(adapter.calls, 0, reason: 'nothing should reach the network');
@@ -74,8 +83,10 @@ void main() {
 
     final result = await ApiServices.instance().get(endpoint: '/users');
 
-    expect(result.getLeft().toNullable()!.errorType,
-        ErrorSource.noInternetConnection);
+    expect(
+      result.getLeft().toNullable()!.errorType,
+      ErrorSource.noInternetConnection,
+    );
   });
 
   test('a positive result is reused for connectivityCacheTtl', () async {
@@ -102,36 +113,39 @@ void main() {
   test('a negative result is never cached, so recovery is immediate', () async {
     var online = false;
     final adapter = _OkAdapter();
-    init(
-      adapter,
-      ttl: const Duration(seconds: 30),
-      probe: () async => online,
-    );
+    init(adapter, ttl: const Duration(seconds: 30), probe: () async => online);
 
     final api = ApiServices.instance();
     expect((await api.get(endpoint: '/a')).isLeft(), isTrue);
 
     online = true;
-    expect((await api.get(endpoint: '/a')).isRight(), isTrue,
-        reason: 'a cached false would keep reporting offline');
+    expect(
+      (await api.get(endpoint: '/a')).isRight(),
+      isTrue,
+      reason: 'a cached false would keep reporting offline',
+    );
   });
 
   test('bypassConnectivityCheck skips the probe entirely', () async {
     var probed = 0;
     final adapter = _OkAdapter();
-    ApiServices.init(ApiConfig(
-      baseUrl: 'https://api.test',
-      httpClientAdapter: adapter,
-      bypassConnectivityCheck: true,
-      connectivityProbe: () async {
-        probed++;
-        return false;
-      },
-      logging: const ApiLogOptions(enabled: false),
-    ));
+    ApiServices.init(
+      ApiConfig(
+        baseUrl: 'https://api.test',
+        httpClientAdapter: adapter,
+        bypassConnectivityCheck: true,
+        connectivityProbe: () async {
+          probed++;
+          return false;
+        },
+        logging: const ApiLogOptions(enabled: false),
+      ),
+    );
 
     expect(
-        (await ApiServices.instance().get(endpoint: '/a')).isRight(), isTrue);
+      (await ApiServices.instance().get(endpoint: '/a')).isRight(),
+      isTrue,
+    );
     expect(probed, 0);
   });
 }

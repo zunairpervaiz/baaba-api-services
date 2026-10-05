@@ -24,26 +24,30 @@ class DioFactory {
   /// 3. [NetworkRetryInterceptor] — retries transient failures. After auth, so
   ///    a retry carries a valid token.
   /// 4. [PrettyDioLogger] — non-release builds only.
-  /// 5. [ObserverInterceptor] — last, so it reports the final outcome rather
-  ///    than each failure the chain above went on to recover from.
+  /// 5. [ObserverInterceptor] — last, so `onRequest` sees the request as it
+  ///    actually goes out, once per attempt. Outcomes (`onResponse`,
+  ///    `onFailure`) are reported by the service layer, not from here.
   Dio getDio({ApiConfig config = const ApiConfig()}) {
-    final dio = Dio(BaseOptions(
-      baseUrl: config.baseUrl ?? '',
-      // Copied into a Map<String, dynamic> because Dio writes non-string
-      // values (content-length) into this map as requests go out.
-      headers: Map<String, dynamic>.from(config.defaultHeaders),
-      connectTimeout: config.connectTimeout,
-      receiveTimeout: config.receiveTimeout,
-      sendTimeout: config.sendTimeout,
-    ));
+    final dio = Dio(
+      BaseOptions(
+        baseUrl: config.baseUrl ?? '',
+        // Copied into a Map<String, dynamic> because Dio writes non-string
+        // values (content-length) into this map as requests go out.
+        headers: Map<String, dynamic>.from(config.defaultHeaders),
+        connectTimeout: config.connectTimeout,
+        receiveTimeout: config.receiveTimeout,
+        sendTimeout: config.sendTimeout,
+      ),
+    );
 
     final adapter = config.httpClientAdapter;
     if (adapter != null) dio.httpClientAdapter = adapter;
 
     final auth = config.auth;
     if (auth != null) {
-      dio.interceptors
-          .add(TokenRefreshInterceptor.fromConfig(dio: dio, config: auth));
+      dio.interceptors.add(
+        TokenRefreshInterceptor.fromConfig(dio: dio, config: auth),
+      );
     }
 
     // After auth, so a signing interceptor sees the Authorization header it
@@ -52,21 +56,24 @@ class DioFactory {
     // what the caller adds is what gets printed.
     dio.interceptors.addAll(config.interceptors);
 
-    dio.interceptors
-        .add(NetworkRetryInterceptor(dio: dio, policy: config.retry));
+    dio.interceptors.add(
+      NetworkRetryInterceptor(dio: dio, policy: config.retry),
+    );
 
     if (!kReleaseMode && config.logging.enabled) {
-      dio.interceptors.add(PrettyDioLogger(
-        request: config.logging.request,
-        requestHeader: config.logging.requestHeader,
-        requestBody: config.logging.requestBody,
-        responseHeader: config.logging.responseHeader,
-        responseBody: config.logging.responseBody,
-        error: config.logging.error,
-        maxWidth: config.logging.maxWidth,
-        compact: config.logging.compact,
-        logPrint: _logSink(config.logging),
-      ));
+      dio.interceptors.add(
+        PrettyDioLogger(
+          request: config.logging.request,
+          requestHeader: config.logging.requestHeader,
+          requestBody: config.logging.requestBody,
+          responseHeader: config.logging.responseHeader,
+          responseBody: config.logging.responseBody,
+          error: config.logging.error,
+          maxWidth: config.logging.maxWidth,
+          compact: config.logging.compact,
+          logPrint: _logSink(config.logging),
+        ),
+      );
     }
 
     final observer = config.observer;

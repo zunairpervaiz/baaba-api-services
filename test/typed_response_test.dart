@@ -25,19 +25,23 @@ void main() {
   late MockNetworkInfo mockNetworkInfo;
 
   void stubResponse(Object? body, {int statusCode = 200}) {
-    when(() => mockDio.request<dynamic>(
-          any(),
-          data: any(named: 'data'),
-          queryParameters: any(named: 'queryParameters'),
-          options: any(named: 'options'),
-          cancelToken: any(named: 'cancelToken'),
-          onSendProgress: any(named: 'onSendProgress'),
-          onReceiveProgress: any(named: 'onReceiveProgress'),
-        )).thenAnswer((_) async => Response(
-          requestOptions: RequestOptions(path: '/users'),
-          statusCode: statusCode,
-          data: body,
-        ));
+    when(
+      () => mockDio.request<dynamic>(
+        any(),
+        data: any(named: 'data'),
+        queryParameters: any(named: 'queryParameters'),
+        options: any(named: 'options'),
+        cancelToken: any(named: 'cancelToken'),
+        onSendProgress: any(named: 'onSendProgress'),
+        onReceiveProgress: any(named: 'onReceiveProgress'),
+      ),
+    ).thenAnswer(
+      (_) async => Response(
+        requestOptions: RequestOptions(path: '/users'),
+        statusCode: statusCode,
+        data: body,
+      ),
+    );
   }
 
   setUp(() {
@@ -67,13 +71,10 @@ void main() {
       );
 
       expect(result.isRight(), isTrue);
-      result.fold(
-        (f) => fail('Expected a user, got $f'),
-        (user) {
-          expect(user.id, 1);
-          expect(user.name, 'Ada');
-        },
-      );
+      result.fold((f) => fail('Expected a user, got $f'), (user) {
+        expect(user.id, 1);
+        expect(user.name, 'Ada');
+      });
     });
 
     test('a throwing parser becomes a Failure, never an exception', () async {
@@ -85,16 +86,13 @@ void main() {
       );
 
       expect(result.isLeft(), isTrue);
-      result.fold(
-        (failure) {
-          expect(failure.errorType, ErrorSource.parseError);
-          expect(failure.code, ResponseCode.parseError);
-          // The raw body is kept so the caller can log what actually arrived.
-          expect(failure.data, {'unexpected': 'shape'});
-          expect(failure.statusCode, 200);
-        },
-        (_) => fail('Expected a parse failure'),
-      );
+      result.fold((failure) {
+        expect(failure.errorType, ErrorSource.parseError);
+        expect(failure.code, ResponseCode.parseError);
+        // The raw body is kept so the caller can log what actually arrived.
+        expect(failure.data, {'unexpected': 'shape'});
+        expect(failure.statusCode, 200);
+      }, (_) => fail('Expected a parse failure'));
     });
 
     test('propagates a network failure without invoking the parser', () async {
@@ -130,19 +128,16 @@ void main() {
         parser: listParser(User.fromJson),
       );
 
-      result.fold(
-        (f) => fail('Expected users, got $f'),
-        (users) {
-          expect(users, hasLength(2));
-          expect(users.last.name, 'Grace');
-        },
-      );
+      result.fold((f) => fail('Expected users, got $f'), (users) {
+        expect(users, hasLength(2));
+        expect(users.last.name, 'Grace');
+      });
     });
 
     test('pulls the array out of a wrapper key', () async {
       stubResponse({
         'data': [
-          {'id': 7, 'name': 'Alan'}
+          {'id': 7, 'name': 'Alan'},
         ],
         'meta': {'total': 1},
       });

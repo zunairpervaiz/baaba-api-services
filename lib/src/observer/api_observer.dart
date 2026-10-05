@@ -46,8 +46,7 @@ abstract class ApiObserver {
   /// [onFailure], which fire exactly once per call.
   void onRequest(RequestOptions options) {}
 
-  /// Fires once per call for each response handed back as `Right`, including
-  /// one served from the cache.
+  /// Fires once per call for each response handed back as `Right`.
   ///
   /// Not called for a `2xx` that `ApiConfig.isSuccess` rejected — that goes to
   /// [onFailure] instead, since that is what the caller receives.
@@ -60,11 +59,11 @@ abstract class ApiObserver {
 
   /// Fires once per call for every `Left` the package returns, whatever
   /// produced it: an HTTP error, a timeout, the offline short-circuit, a
-  /// rejected `isSuccess` body, a `cacheOnly` miss, or a parse failure.
+  /// rejected `isSuccess` body, or a parse failure.
   ///
   /// [options] is `null` when no request was ever built — the offline
-  /// short-circuit and a `cacheOnly` miss are the cases. It is also available
-  /// as `failure.requestOptions`.
+  /// short-circuit is the case. It is also available as
+  /// `failure.requestOptions`.
   ///
   /// "Once per call" counts calls you made, not network round-trips: two
   /// concurrent identical `GET`s that de-duplication collapses onto one

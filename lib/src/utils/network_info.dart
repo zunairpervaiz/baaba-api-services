@@ -29,8 +29,8 @@ class NetworkInfo {
     this.cacheTtl = const Duration(seconds: 5),
     Future<bool> Function()? probe,
     DateTime Function()? clock,
-  })  : _probe = probe ?? _defaultProbe,
-        _clock = clock ?? DateTime.now;
+  }) : _probe = probe ?? _defaultProbe,
+       _clock = clock ?? DateTime.now;
 
   static Future<bool> _defaultProbe() => InternetConnection().hasInternetAccess;
 

@@ -93,14 +93,13 @@ class ApiLogOptions {
   /// [Base64LogTrimmer] and pass it as [logPrint] instead.
   final bool trimBase64;
 
-  /// Where log lines go. Defaults to `print`.
+  /// Where log lines go. Defaults to `debugPrint`.
   ///
-  /// Use this to route logs somewhere other than the console — `debugPrint`
-  /// to avoid Android's log truncation, or your own crash reporter / file sink:
+  /// Use this to route logs somewhere other than the console — your own
+  /// crash reporter or a file sink:
   ///
   /// ```dart
-  /// const ApiLogOptions(logPrint: debugPrint)   // note: takes String?, wrap it
-  /// ApiLogOptions(logPrint: (o) => debugPrint(o.toString()))
+  /// ApiLogOptions(logPrint: (o) => crashReporter.log(o.toString()))
   /// ```
   final void Function(Object object)? logPrint;
 
@@ -120,19 +119,23 @@ class ApiLogOptions {
 
   /// No logging at all, even in debug builds.
   const ApiLogOptions.disabled()
-      : enabled = false,
-        request = false,
-        requestHeader = false,
-        requestBody = false,
-        responseHeader = false,
-        responseBody = false,
-        error = false,
-        maxWidth = 90,
-        compact = true,
-        trimBase64 = false,
-        logPrint = null;
+    : enabled = false,
+      request = false,
+      requestHeader = false,
+      requestBody = false,
+      responseHeader = false,
+      responseBody = false,
+      error = false,
+      maxWidth = 90,
+      compact = true,
+      trimBase64 = false,
+      logPrint = null;
 
   /// Returns a copy with the given fields replaced.
+  ///
+  /// Only replaces — passing `null` is indistinguishable from omitting the
+  /// argument, so it cannot remove a [logPrint]. Build a fresh
+  /// [ApiLogOptions] for that.
   ApiLogOptions copyWith({
     bool? enabled,
     bool? request,

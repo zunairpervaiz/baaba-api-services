@@ -1,18 +1,15 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:convert';
 
-import 'package:baaba_api_handler/src/api_cache_helper.dart';
 import 'package:baaba_api_handler/src/config/api_config.dart';
-import 'package:baaba_api_handler/src/config/cache_policy.dart';
 import 'package:baaba_api_handler/src/dio_factory.dart';
-import 'package:baaba_api_handler/src/utils/cache_key.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 import 'package:baaba_api_handler/src/utils/failure.dart';
 import 'package:baaba_api_handler/src/utils/http_methods.dart';
 import 'package:baaba_api_handler/src/utils/network_info.dart';
+import 'package:baaba_api_handler/src/utils/request_key.dart';
 import 'package:baaba_api_handler/src/utils/success_check.dart';
 import 'package:baaba_api_handler/src/utils/refresh_zone.dart';
 import 'package:baaba_api_handler/src/utils/response_code.dart';
@@ -136,11 +133,14 @@ abstract interface class ApiServices {
   /// Call once at app startup, before any request. Calling it again replaces
   /// the singleton, which is what you want after a logout/re-login.
   ///
-  /// Settings read at *request* time — `bypassConnectivityCheck`, `isSuccess`
-  /// — take effect immediately. Settings baked into the Dio client and its
-  /// interceptors — `baseUrl`, timeouts, `logging`, `retry`, `auth`,
-  /// `observer`, `httpClientAdapter` — apply to the client built here, so
-  /// changing them means calling [init] again.
+  /// Settings read at *request* time — `bypassConnectivityCheck`,
+  /// `isSuccess`, `onRejected`, and the observer's `onResponse`/`onFailure` —
+  /// take effect immediately. Settings baked into the Dio client and its
+  /// interceptors — `baseUrl`, timeouts, `defaultHeaders`, `logging`,
+  /// `retry`, `auth`, `interceptors`, `httpClientAdapter`,
+  /// `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and
+  /// the observer's `onRequest` — apply to the client built here, so changing
+  /// them means calling [init] again.
   ///
   /// See [ApiConfig] for every option.
   static void init(ApiConfig config) {
@@ -190,12 +190,18 @@ abstract interface class ApiServices {
   /// The next [instance] call builds a fresh default client.
   ///
   /// Requests still in flight on the discarded client are cancelled, and
-  /// complete with `ErrorSource.cancel`. Left running, one that finished
-  /// after a logout's `clearAllCache()` would write the previous user's
-  /// response straight back into the cache — and its token would still be
-  /// the previous user's. [init] does not do this, since re-configuring is
-  /// not necessarily a change of user.
+  /// complete with `ErrorSource.cancel`. Left running, one would still carry
+  /// the previous user's token and report to the previous user's observer.
+  /// [init] does not do this, since re-configuring is not necessarily a
+  /// change of user.
+  ///
+  /// A loading indicator still showing is hidden first. The requests that
+  /// would have hidden it are now stale and their release is ignored, so
+  /// without this the dialog `onShow` opened would never be closed.
   static void reset() {
+    if (_activeLoadingCount > 0) {
+      ApiServicesImplementation._callLoader(_onLoadingHide);
+    }
     final previous = _instance;
     if (previous is ApiServicesImplementation) previous._close();
     _instance = null;
@@ -264,21 +270,11 @@ abstract interface class ApiServices {
   /// );
   /// ```
   ///
-  /// **Caching.** Omit [cachePolicy] and the project-wide
-  /// `ApiConfig.defaultCachePolicy` applies — itself [CachePolicy.networkOnly]
-  /// unless changed, which ignores the cache entirely. Anything else stores
-  /// successful responses and can serve them back; see [CachePolicy].
-  /// [cacheMaxAge] bounds how old a cached entry may be before it counts as a
-  /// miss.
-  ///
-  /// A project can forbid caching outright with
-  /// `ApiConfig(cacheEnabled: false)`, which overrides whatever is passed
-  /// here.
-  ///
   /// **De-duplication.** Two identical GETs in flight at the same time share
   /// one network call by default. Pass `dedupe: false` to force a separate
-  /// request. Automatically skipped when you supply your own [cancelToken],
-  /// since cancelling one caller must not cancel the other.
+  /// request. Automatically skipped when you supply your own [cancelToken] or
+  /// a [tag], since cancelling one caller must not cancel the other, and when
+  /// you pass a progress callback, which only one caller's request can drive.
   Future<Either<Failure, Response>> get({
     required String endpoint,
     Object? data,
@@ -292,8 +288,6 @@ abstract interface class ApiServices {
     ResponseType? responseType,
     String? tag,
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
     bool dedupe = true,
   });
 
@@ -329,8 +323,6 @@ abstract interface class ApiServices {
     ResponseType? responseType,
     String? tag,
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
     bool dedupe = true,
   });
 
@@ -677,7 +669,6 @@ abstract interface class ApiServices {
 class ApiServicesImplementation implements ApiServices {
   final Dio _dio;
   final NetworkInfo _networkInfo;
-  final ApiCacheHelper? _cacheOverride;
 
   final Map<String, String> _defaultHeader = {
     contentType: applicationJson,
@@ -703,37 +694,23 @@ class ApiServicesImplementation implements ApiServices {
   // Caps how many requests actually reach the network at once.
   final _RequestGate _gate;
 
-  ApiServicesImplementation._({
-    required Dio dio,
-    NetworkInfo? networkInfo,
-    ApiCacheHelper? cacheHelper,
-  })  : _dio = dio,
-        _networkInfo = networkInfo ?? NetworkInfo(),
-        _cacheOverride = cacheHelper,
-        _gate = _RequestGate(ApiServices._config.maxConcurrentRequests);
+  ApiServicesImplementation._({required Dio dio, NetworkInfo? networkInfo})
+    : _dio = dio,
+      _networkInfo = networkInfo ?? NetworkInfo(),
+      _gate = _RequestGate(ApiServices._config.maxConcurrentRequests);
 
   factory ApiServicesImplementation.instanceFor({
     required Dio dio,
     NetworkInfo? networkInfo,
-    ApiCacheHelper? cacheHelper,
   }) {
-    return ApiServicesImplementation._(
-      dio: dio,
-      networkInfo: networkInfo,
-      cacheHelper: cacheHelper,
-    );
+    return ApiServicesImplementation._(dio: dio, networkInfo: networkInfo);
   }
-
-  /// Resolved lazily: touching [ApiCacheHelper.instance] opens the SQLite
-  /// database, which must not happen for callers that never use a cache
-  /// policy.
-  ApiCacheHelper get _cache => _cacheOverride ?? ApiCacheHelper.instance;
 
   // ---------------------------------------------------------------------------
   // Request pipeline
   // ---------------------------------------------------------------------------
 
-  /// Outermost layer: loader accounting and cache policy.
+  /// Outermost layer: loader accounting and outcome reporting.
   Future<Either<Failure, Response>> _sendRequest(
     _Call call, {
     bool showLoader = true,
@@ -744,81 +721,10 @@ class ApiServicesImplementation implements ApiServices {
       // layers are shared: de-duplication collapses two callers onto one
       // _performRequest, so notifying from there would emit a single event
       // for two calls.
-      return _notify(await _resolve(call));
+      return _notify(await _dispatch(call));
     } finally {
       if (epoch != null) _hideLoader(epoch);
     }
-  }
-
-  /// Applies the cache policy around the network call.
-  Future<Either<Failure, Response>> _resolve(_Call call) async {
-    final policy = _effectiveCachePolicy(call);
-
-    final cacheKey =
-        policy == CachePolicy.networkOnly ? null : _cacheKeyFor(call);
-
-    // cacheOnly must never touch the network, even for a request that cannot
-    // be keyed; that is simply a miss.
-    if (policy == CachePolicy.cacheOnly && cacheKey == null) {
-      return left(ErrorSource.cacheError.getFailure());
-    }
-
-    if (cacheKey != null && policy != CachePolicy.networkFirst) {
-      final cached = await _readCache(cacheKey, call.cacheMaxAge);
-      if (cached != null) return right(cached);
-      if (policy == CachePolicy.cacheOnly) {
-        return left(ErrorSource.cacheError.getFailure());
-      }
-    }
-
-    final result = await _dispatch(call);
-
-    if (cacheKey == null) return result;
-
-    return result.fold(
-      (failure) async {
-        // networkFirst is the only policy that can still succeed here: serve
-        // the last-known-good response rather than an error screen.
-        if (policy != CachePolicy.networkFirst) return left(failure);
-        final cached = await _readCache(cacheKey, call.cacheMaxAge);
-        return cached == null ? left(failure) : right(cached);
-      },
-      (response) async {
-        await _writeCache(cacheKey, response);
-        return right(response);
-      },
-    );
-  }
-
-  /// The cache key for [call], or `null` when it cannot be cached safely.
-  ///
-  /// Additions are suffixes on the url key, made only when they apply, so the
-  /// key for an ordinary JSON GET is unchanged and existing entries stay
-  /// readable:
-  ///
-  /// - a **body**, JSON-encoded: `get` accepts one, and without it two
-  ///   searches differing only in their body shared an entry, so the second
-  ///   was answered with the first's results. A body that will not encode
-  ///   returns `null`.
-  /// - a **plain-text** response type: under the shared key, a `plain` caller
-  ///   was handed the Map a JSON caller of the same url had cached. Binary
-  ///   types never reach here (see [_effectiveCachePolicy]).
-  String? _cacheKeyFor(_Call call) {
-    final buffer = StringBuffer(buildCacheKey(
-      baseUrl: ApiServices._config.baseUrl,
-      endpoint: call.endpoint,
-      params: call.params,
-    ));
-    if (call.responseType == ResponseType.plain) buffer.write('|as:plain');
-    final data = call.data;
-    if (data != null) {
-      try {
-        buffer.write('|body:${jsonEncode(data)}');
-      } catch (_) {
-        return null;
-      }
-    }
-    return buffer.toString();
   }
 
   /// Reports an outcome to the observer and passes it straight through.
@@ -864,7 +770,13 @@ class ApiServicesImplementation implements ApiServices {
     // Progress callbacks belong to one caller too. Only the originator's are
     // handed to Dio, so a follower's progress bar would sit at zero until the
     // response arrived.
+    //
+    // A request made from inside onTokenRefresh skips the concurrency gate,
+    // but a follower never reaches the gate — it waits on the originator. If
+    // that originator is queued behind the request awaiting this refresh,
+    // collapsing onto it is the very deadlock the bypass exists to prevent.
     if (!call.dedupe ||
+        isInsideTokenRefresh ||
         call.cancelToken != null ||
         call.tag != null ||
         call.onSendProgress != null ||
@@ -910,6 +822,10 @@ class ApiServicesImplementation implements ApiServices {
           onReceiveProgress: call.onReceiveProgress,
         ),
       );
+      // HEAD has no body, so a body-reading isSuccess — the documented
+      // `r.data['success'] == true` shape — would throw on every call, and a
+      // throwing predicate counts as a rejection. Skipped, as for download.
+      if (call.method == HttpMethod.head) return result;
       return result.flatMap(_evaluate);
     });
   }
@@ -973,39 +889,6 @@ class ApiServicesImplementation implements ApiServices {
     }
   }
 
-  /// Resolves what a request may actually do with the cache.
-  ///
-  /// `ApiConfig.cacheEnabled: false` wins over anything a call site asked for,
-  /// so a project that must not persist responses cannot be undone by one
-  /// stray `cachePolicy:` argument.
-  ///
-  /// **Caching is GET-only, and that has to be enforced here rather than left
-  /// to the method signatures.** Only `get`/`getAs` expose a `cachePolicy`
-  /// parameter, so the contract looks self-enforcing — but
-  /// `ApiConfig.defaultCachePolicy` applies to every request that does not
-  /// name one, which is every `post`, `put`, `patch`, `delete`, `head` and
-  /// `options` there is. A project that set a project-wide policy would have
-  /// its writes served from the cache: the second identical `POST /orders`
-  /// would return the first one's response without ever reaching the server.
-  /// Cache keys carry no method or body either, so a `POST` and a `GET` to one
-  /// path share an entry.
-  ///
-  /// Binary responses are not cached either. Entries are stored as JSON, so a
-  /// `bytes` body would come back as a `List<dynamic>` rather than the
-  /// `Uint8List` the caller asked for, and a `stream` body cannot be stored at
-  /// all. Worse, the key has no response type in it, so a `bytes` caller could
-  /// be served a map cached by a JSON caller of the same url.
-  CachePolicy _effectiveCachePolicy(_Call call) {
-    final config = ApiServices._config;
-    if (!config.cacheEnabled) return CachePolicy.networkOnly;
-    if (call.method != HttpMethod.get) return CachePolicy.networkOnly;
-    if (call.responseType == ResponseType.bytes ||
-        call.responseType == ResponseType.stream) {
-      return CachePolicy.networkOnly;
-    }
-    return call.cachePolicy ?? config.defaultCachePolicy;
-  }
-
   /// Picks the headers for a request.
   ///
   /// A JSON `content-type` must not travel with a multipart body — it would
@@ -1018,9 +901,11 @@ class ApiServicesImplementation implements ApiServices {
     if (headers == null) return {accept: applicationJson};
 
     final stripped = Map<String, String>.of(headers)
-      ..removeWhere((key, value) =>
-          key.toLowerCase() == contentType &&
-          !value.toLowerCase().contains('multipart/'));
+      ..removeWhere(
+        (key, value) =>
+            key.toLowerCase() == contentType &&
+            !value.toLowerCase().contains('multipart/'),
+      );
     return stripped;
   }
 
@@ -1041,50 +926,9 @@ class ApiServicesImplementation implements ApiServices {
   /// Converts a thrown error into a `Failure`, keeping the request that
   /// produced it so the observer can say which call failed.
   Failure _toFailure(Object error) {
-    return ErrorHandler.handle(error).failure.withRequest(
-          error is DioException ? error.requestOptions : null,
-        );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Cache
-  // ---------------------------------------------------------------------------
-
-  /// Rebuilds a [Response] from a cache entry, or `null` on a miss.
-  ///
-  /// Never throws: a cache that cannot be read is a miss, not an error worth
-  /// failing the caller's request over.
-  Future<Response?> _readCache(String key, Duration? maxAge) async {
-    try {
-      final entry = await _cache.getCacheData(key, maxAge: maxAge);
-      if (entry == null || entry.syncData.isEmpty) return null;
-
-      return Response(
-        requestOptions: RequestOptions(path: key),
-        statusCode: 200,
-        data: jsonDecode(entry.syncData),
-        extra: {fromCacheKey: true},
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Stores a successful response. Best-effort — a body that will not encode
-  /// (or a full disk) must never turn a good response into a failure.
-  Future<void> _writeCache(String key, Response response) async {
-    final status = response.statusCode ?? 0;
-    if (status < 200 || status >= 300) return;
-
-    final config = ApiServices._config;
-    try {
-      await _cache.setCacheData(
-        key,
-        jsonEncode(response.data),
-        maxEntries: config.cacheMaxEntries,
-        maxBytes: config.cacheMaxBytes,
-      );
-    } catch (_) {}
+    return ErrorHandler.handle(
+      error,
+    ).failure.withRequest(error is DioException ? error.requestOptions : null);
   }
 
   // ---------------------------------------------------------------------------
@@ -1199,8 +1043,6 @@ class ApiServicesImplementation implements ApiServices {
     ResponseType? responseType,
     String? tag,
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
     bool dedupe = true,
   }) {
     return _sendRequest(
@@ -1217,8 +1059,6 @@ class ApiServicesImplementation implements ApiServices {
         cancelToken: cancelToken,
         responseType: responseType,
         tag: tag,
-        cachePolicy: cachePolicy,
-        cacheMaxAge: cacheMaxAge,
         dedupe: dedupe,
       ),
       showLoader: showLoader,
@@ -1240,8 +1080,6 @@ class ApiServicesImplementation implements ApiServices {
     ResponseType? responseType,
     String? tag,
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
     bool dedupe = true,
   }) async {
     return _parse(
@@ -1258,8 +1096,6 @@ class ApiServicesImplementation implements ApiServices {
         responseType: responseType,
         tag: tag,
         showLoader: showLoader,
-        cachePolicy: cachePolicy,
-        cacheMaxAge: cacheMaxAge,
         dedupe: dedupe,
       ),
       parser,
@@ -1625,8 +1461,9 @@ class ApiServicesImplementation implements ApiServices {
         // there, and all but the last would silently vanish.
         formData = FormData.fromMap(fields);
         for (final file in files) {
-          formData.files
-              .add(MapEntry(file.field, await file.toMultipartFile()));
+          formData.files.add(
+            MapEntry(file.field, await file.toMultipartFile()),
+          );
         }
       } catch (e) {
         // A missing or unreadable file should surface as a Failure like
@@ -1675,30 +1512,32 @@ class ApiServicesImplementation implements ApiServices {
     final epoch = showLoader ? _showLoader() : null;
     try {
       // download() has its own path rather than going through _sendRequest —
-      // it streams to disk and no cache policy or de-duplication applies — so
+      // it streams to disk and de-duplication does not apply — so
       // it reports its own outcome.
-      return _notify(await _tracked(cancelToken, tag, (token) async {
-        final offline = await _checkConnectivity();
-        if (offline != null) return left(offline);
-        if (token.isCancelled) return left(ErrorSource.cancel.getFailure());
+      return _notify(
+        await _tracked(cancelToken, tag, (token) async {
+          final offline = await _checkConnectivity();
+          if (offline != null) return left(offline);
+          if (token.isCancelled) return left(ErrorSource.cancel.getFailure());
 
-        return _throughGate(
-          token,
-          (token) => _dio.download(
-            endpoint,
-            savePath,
-            queryParameters: params,
-            options: Options(
-              receiveTimeout: receiveTimeout,
-              sendTimeout: sendTimeout,
-              headers: headers ?? _defaultHeader,
+          return _throughGate(
+            token,
+            (token) => _dio.download(
+              endpoint,
+              savePath,
+              queryParameters: params,
+              options: Options(
+                receiveTimeout: receiveTimeout,
+                sendTimeout: sendTimeout,
+                headers: headers ?? _defaultHeader,
+              ),
+              cancelToken: token,
+              onReceiveProgress: onReceiveProgress,
+              deleteOnError: deleteOnError,
             ),
-            cancelToken: token,
-            onReceiveProgress: onReceiveProgress,
-            deleteOnError: deleteOnError,
-          ),
-        );
-      }));
+          );
+        }),
+      );
     } finally {
       if (epoch != null) _hideLoader(epoch);
     }
@@ -1733,8 +1572,6 @@ class _Call {
   final CancelToken? cancelToken;
   final ResponseType? responseType;
   final String? tag;
-  final CachePolicy? cachePolicy;
-  final Duration? cacheMaxAge;
   final bool dedupe;
 
   const _Call(
@@ -1750,17 +1587,15 @@ class _Call {
     this.cancelToken,
     this.responseType,
     this.tag,
-    this.cachePolicy,
-    this.cacheMaxAge,
     this.dedupe = false,
   });
 }
 
 /// Caps how many requests may be in flight at once, per client.
 ///
-/// Sits at the innermost layer, below the cache and below de-duplication, so
-/// the cap governs actual network calls: a cache hit never consumes a slot,
-/// and two callers collapsed onto one request consume one between them.
+/// Sits at the innermost layer, below de-duplication, so the cap governs
+/// actual network calls: two callers collapsed onto one request consume one
+/// slot between them.
 ///
 /// A `null` limit is unlimited — nothing is tracked and [acquire] never
 /// suspends.

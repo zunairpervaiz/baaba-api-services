@@ -17,9 +17,14 @@
 /// **It filters lines, not fields**, because lines are all it is given — the
 /// logger has already flattened the map by the time this is called. So the
 /// test is a shape test: a run of characters from the base64 alphabet, long
-/// enough that it cannot be an id or a status. Anything else passes through
-/// byte for byte, which is the point — a `detail` string, a case number and a
-/// stack trace still read exactly as they did.
+/// enough that it cannot be an id or a status, that also reads like encoded
+/// bytes — upper *and* lower case, and `/` no denser than one character in
+/// ten. The alphabet alone is not enough: it includes `/`, so a long url path
+/// (`/api/v1/organizations/12345/departments`) matches it, as do hex digests
+/// and git SHAs. Those fail the second test, since a path is slash-dense and
+/// usually lowercase, and hex is single-case. Anything else passes through
+/// byte for byte, which is the point — a `detail` string, a case number, a
+/// request url and a stack trace still read exactly as they did.
 ///
 /// Usually you want [ApiLogOptions.trimBase64] rather than this class
 /// directly:
@@ -66,8 +71,8 @@ class Base64LogTrimmer {
     required this.sink,
     this.keptChars = 24,
     this.minRunLength = 40,
-  })  : _blobTail = RegExp('([A-Za-z0-9+/]{$minRunLength,}={0,2})"?,?\$'),
-        _blobChunk = RegExp('^[A-Za-z0-9+/]{$minRunLength,}={0,2}"?,?\$');
+  }) : _blobTail = RegExp('([A-Za-z0-9+/]{$minRunLength,}={0,2})"?,?\$'),
+       _blobChunk = RegExp('^[A-Za-z0-9+/]{$minRunLength,}={0,2}"?,?\$');
 
   /// The tail of a line that introduces a blob — `"data": iVBORw0KG…`.
   /// Anchored to the end so the key, the indent and the box drawing are all
@@ -92,7 +97,7 @@ class Base64LogTrimmer {
 
     // A continuation line: the logger wrapped a blob and this is the middle of
     // it, with no key to say what it belongs to. Swallow it and keep counting.
-    if (_blobChunk.hasMatch(body)) {
+    if (_blobChunk.hasMatch(body) && _readsAsEncoded(body)) {
       _elided += body.replaceAll(_punctuation, '').length;
       return;
     }
@@ -105,15 +110,39 @@ class Base64LogTrimmer {
     final head = _blobTail.firstMatch(line);
     if (head != null) {
       final blob = head.group(1)!;
-      if (blob.length > keptChars) {
+      if (blob.length > keptChars && _readsAsEncoded(blob)) {
         _elided += blob.length - keptChars;
-        sink('${line.substring(0, head.start)}'
-            '${blob.substring(0, keptChars)}…');
+        sink(
+          '${line.substring(0, head.start)}'
+          '${blob.substring(0, keptChars)}…',
+        );
         return;
       }
     }
 
     sink(line);
+  }
+
+  /// Whether a run that already has the base64 shape is plausibly encoded
+  /// bytes rather than a path or a hex digest.
+  ///
+  /// Random bytes encode to a mix of cases with a `/` about one character in
+  /// 64; a url path runs closer to one in eight, and is usually lowercase.
+  /// The one-in-ten bound leaves a wrapped line of real base64 a chance of
+  /// roughly 1 in 40,000 of being printed rather than swallowed.
+  static bool _readsAsEncoded(String run) {
+    var upper = false, lower = false;
+    var slashes = 0;
+    for (final unit in run.codeUnits) {
+      if (unit >= 0x41 && unit <= 0x5A) {
+        upper = true;
+      } else if (unit >= 0x61 && unit <= 0x7A) {
+        lower = true;
+      } else if (unit == 0x2F) {
+        slashes++;
+      }
+    }
+    return upper && lower && slashes * 10 <= run.length;
   }
 
   void _flush() {

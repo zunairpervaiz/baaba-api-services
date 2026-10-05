@@ -1,3 +1,41 @@
+## 4.0.0
+
+See `MIGRATION.md` for upgrade steps.
+
+### ⚠️ Breaking changes
+
+* **Requires Dart 3.8 / Flutter 3.32.** The constraint used to claim Dart 3.3.1, but the package's own tooling needed 3.8, so nothing older was ever built or tested.
+* **Response caching is removed**, along with the `api_cache_manager` dependency (and `sqflite` beneath it). Every request goes to the network. Removed: `CachePolicy`, `ApiCacheHelper`, the `APICacheDBModel` re-export, the `CachedResponse` extension (`response.isFromCache`), the `cachePolicy` and `cacheMaxAge` parameters on `get`/`getAs` (and on `FakeApiServices`), and the `ApiConfig` fields `cacheEnabled`, `defaultCachePolicy`, `cacheMaxEntries` and `cacheMaxBytes`.
+* **`504 Gateway Timeout` has its own error: `ErrorSource.gatewayTimeout` / `ResponseCode.gatewayTimeout`.** It used to fall through to `defaultError` with "An unexpected error occurred", unlike its neighbours `502` and `503`. Exhaustive switches need a case for it.
+* **`isSuccess` is no longer applied to `head()`.** A `HEAD` response has no body, so a predicate reading it — the common `r.data['success'] == true` — threw on every call, and a throw counts as a rejection. `download()` already skipped it.
+* **`ErrorSource.cacheError` and `ResponseCode.cacheError` are removed.** Exhaustive switches naming them stop compiling. The code `-5` is retired, not reused: `mapStatusCodeToEnum(-5)` now returns `defaultError`.
+* The unexported `src/utils/response_messages.dart` shim is deleted.
+
+### Fixed
+
+* **A refresh token that had expired froze the app for `refreshTimeout` (30s) before signing out.** When `onTokenRefresh` refreshed through the same client and the refresh endpoint answered `401`, that `401` waited on the very refresh it belonged to until the timeout, loader showing. It now fails at once and `onRefreshFailed` fires immediately.
+* **A `GET` made inside `onTokenRefresh` could deadlock under `maxConcurrentRequests`.** De-duplication collapsed it onto an identical request queued behind the one awaiting the refresh, skipping the refresh's bypass of the concurrency cap. Requests made during a refresh are no longer de-duplicated.
+* **`ApiServices.reset()` left a showing loader on screen for good.** The in-flight request's hide was correctly ignored as stale, but nothing else closed the dialog. `reset()` now calls `onHide` when a loader is showing.
+* **Exponential backoff broke past 63 retries.** `pow(2, n)` on integers wrapped negative, so the delay slipped under the `maxDelay` clamp and the jitter threw `RangeError` — replacing the real error with `unknown`. Backoff is now computed in doubles.
+* **A retry could replace a real `429`/`503` with an `unknown` error**, losing its status and body: a `Retry-After` header sent twice made Dio's `Headers.value` throw, as did a throwing `RetryPolicy.retryIf`. A repeated header now uses its first value, and a throwing `retryIf` means "don't retry".
+* **`Retry-After: -5` retried immediately.** A negative (invalid) value now falls back to the computed backoff, and only plain digits are read as delta-seconds.
+* **FastAPI/Pydantic `422` messages were lost.** A `{"detail": [{"msg": "field required", ...}]}` body fell back to the generic text. List entries that are objects are now read like any other body, and `msg` is recognised.
+* **A JSON error body received as a string** — `responseType: plain`, or JSON served as `text/plain` — became the raw `{"message": ...}` text in `Failure.message`. It is now decoded and read.
+* **`Base64LogTrimmer` cut long url paths, hex digests and slash-heavy file paths** out of the log, since `/` is in the base64 alphabet. A run must now also mix upper and lower case and be no more than one-tenth `/`.
+* **A `401` from before the previous refresh, arriving during the next one, failed for good.** It replayed at once with the token that refresh was replacing, got a second `401`, and — replayed only once — surfaced it. It now waits for the running refresh.
+* **A refresh landing while a request read its token could trigger a redundant refresh.** The request recorded the post-refresh generation alongside the pre-refresh token, so its `401` looked current. The generation is now read before the token.
+* **A `Stream` request body broke both retry paths.** A `429`/`503` retry or a `401` replay re-read the spent stream and failed with an `unknown` error wrapping `StateError`, losing the real status. Stream bodies are no longer replayed; the original error surfaces. Pass bytes or `FormData` if the upload must be retryable.
+* **`FakeApiServices` diverged from the real client**: its `download` applied `ApiConfig.isSuccess`, which production never does; it ignored an already-cancelled `CancelToken`, which production fails with `ErrorSource.cancel`; and it never reported to `ApiConfig.observer`. It now calls `onRequest`/`onResponse`/`onFailure` as production does, and its failures carry the `RequestOptions` that produced them.
+
+### Changed
+
+* `Failure.toString()` includes `statusCode`, so an unmapped status no longer logs only as `code: -7`.
+* The pubspec now declares `repository` and `issue_tracker` (the 3.0.0 entry claimed this, but they were never added).
+
+### Unchanged
+
+* In-flight de-duplication of identical `GET`, `HEAD` and `OPTIONS` requests works as before.
+
 ## 3.1.0
 
 ### Fixed

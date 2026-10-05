@@ -117,9 +117,7 @@ void main() {
     test('handles DioException with null response status code', () {
       final error = DioException(
         type: DioExceptionType.badResponse,
-        response: Response(
-          requestOptions: RequestOptions(path: '/test'),
-        ),
+        response: Response(requestOptions: RequestOptions(path: '/test')),
         requestOptions: RequestOptions(path: '/test'),
       );
       final failure = ErrorHandler.handle(error);

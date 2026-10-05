@@ -1,5 +1,5 @@
 import 'package:baaba_api_handler/src/api_service.dart';
-import 'package:baaba_api_handler/src/config/cache_policy.dart';
+import 'package:baaba_api_handler/src/observer/api_observer.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 import 'package:baaba_api_handler/src/utils/failure.dart';
@@ -67,6 +67,10 @@ class RecordedCall {
 /// });
 /// ```
 ///
+/// It behaves like the real client where that shapes an outcome:
+/// `ApiConfig.isSuccess`, an already-cancelled `CancelToken`, and
+/// `ApiConfig.observer` all apply exactly as they do in production.
+///
 /// **A missing stub throws.** Calling an endpoint you did not stub raises a
 /// [StateError] naming the method and endpoint, so an unexpected call fails
 /// loudly instead of quietly returning null and failing three asserts later.
@@ -118,12 +122,14 @@ class FakeApiServices implements ApiServices {
     stub(
       method,
       endpoint,
-      right(Response(
-        requestOptions: RequestOptions(path: endpoint),
-        statusCode: statusCode,
-        data: body,
-        headers: headers == null ? null : Headers.fromMap(headers),
-      )),
+      right(
+        Response(
+          requestOptions: RequestOptions(path: endpoint),
+          statusCode: statusCode,
+          data: body,
+          headers: headers == null ? null : Headers.fromMap(headers),
+        ),
+      ),
     );
   }
 
@@ -152,15 +158,17 @@ class FakeApiServices implements ApiServices {
     stub(
       method,
       endpoint,
-      left(message == null
-          ? built
-          : Failure(
-              built.errorType,
-              built.code,
-              message,
-              data: built.data,
-              statusCode: built.statusCode,
-            )),
+      left(
+        message == null
+            ? built
+            : Failure(
+                built.errorType,
+                built.code,
+                message,
+                data: built.data,
+                statusCode: built.statusCode,
+              ),
+      ),
     );
   }
 
@@ -199,16 +207,20 @@ class FakeApiServices implements ApiServices {
     Map<String, String>? headers,
     List<UploadFile> files = const [],
     String? tag,
+    CancelToken? cancelToken,
+    bool evaluate = true,
   }) async {
-    _recordedCalls.add(RecordedCall(
-      method: method,
-      endpoint: endpoint,
-      data: data,
-      params: params,
-      headers: headers,
-      files: files,
-      tag: tag,
-    ));
+    _recordedCalls.add(
+      RecordedCall(
+        method: method,
+        endpoint: endpoint,
+        data: data,
+        params: params,
+        headers: headers,
+        files: files,
+        tag: tag,
+      ),
+    );
 
     final queue = _stubs[_key(method, endpoint)];
     if (queue == null || queue.isEmpty) {
@@ -222,10 +234,61 @@ class FakeApiServices implements ApiServices {
     // Keep the last entry so repeated polling of one endpoint keeps working.
     final result = queue.length == 1 ? queue.first : queue.removeAt(0);
 
+    // Production fails an already-cancelled request before sending it, so a
+    // test of cancel-on-dispose sees the same Left here.
+    if (cancelToken?.isCancelled ?? false) {
+      return _report(left(ErrorSource.cancel.getFailure()));
+    }
+
+    // The offline short-circuit never builds a request, in production or
+    // here; anything else "went out", so the observer hears about it and a
+    // failure carries the request that produced it, as a real one does.
+    final offline = result.fold(
+      (f) => f.errorType == ErrorSource.noInternetConnection,
+      (_) => false,
+    );
+    final options = offline
+        ? null
+        : RequestOptions(
+            path: endpoint,
+            method: method.value,
+            queryParameters: params,
+            headers: headers,
+            data: data,
+          );
+    if (options != null) _observe((o) => o.onRequest(options));
+    final sent = result.mapLeft(
+      (f) => f.requestOptions == null ? f.withRequest(options) : f,
+    );
+
     // ApiConfig.isSuccess applies here as it does in production, so a stubbed
-    // {"success": false} is a Left in tests too.
-    return result
-        .flatMap((response) => evaluateSuccess(response, ApiServices.config));
+    // {"success": false} is a Left in tests too. Not to HEAD or downloads:
+    // production skips it there, since neither has a body in `data`.
+    if (!evaluate) return _report(sent);
+    return _report(
+      sent.flatMap((response) => evaluateSuccess(response, ApiServices.config)),
+    );
+  }
+
+  /// Reports an outcome to `ApiConfig.observer`, once per call, as the real
+  /// client does, and passes it through.
+  Either<Failure, Response> _report(Either<Failure, Response> result) {
+    result.fold(
+      (failure) =>
+          _observe((o) => o.onFailure(failure, failure.requestOptions)),
+      (response) => _observe((o) => o.onResponse(response)),
+    );
+    return result;
+  }
+
+  /// Calls the configured observer, if any. A throwing observer never breaks
+  /// a call — the same guarantee production gives.
+  static void _observe(void Function(ApiObserver observer) notify) {
+    final observer = ApiServices.config.observer;
+    if (observer == null) return;
+    try {
+      notify(observer);
+    } catch (_) {}
   }
 
   Future<Either<Failure, T>> _respondAs<T>(
@@ -236,6 +299,7 @@ class FakeApiServices implements ApiServices {
     Map<String, dynamic>? params,
     Map<String, String>? headers,
     String? tag,
+    CancelToken? cancelToken,
   }) async {
     final result = await _respond(
       method,
@@ -244,27 +308,30 @@ class FakeApiServices implements ApiServices {
       params: params,
       headers: headers,
       tag: tag,
+      cancelToken: cancelToken,
     );
-    return result.fold(
-      (failure) => left<Failure, T>(failure),
-      (response) {
-        // Mirror the real implementation: a throwing parser becomes a
-        // Failure, never an exception. A double that lets it escape would
-        // have tests passing against behaviour production does not have.
-        try {
-          return right<Failure, T>(parser(response.data));
-        } catch (_) {
-          return left<Failure, T>(Failure(
-            ErrorSource.parseError,
-            ResponseCode.parseError,
-            ResponseStrings.parseError,
-            data: response.data,
-            statusCode: response.statusCode,
-            requestOptions: response.requestOptions,
-          ));
-        }
-      },
-    );
+    return result.fold((failure) => left<Failure, T>(failure), (response) {
+      // Mirror the real implementation: a throwing parser becomes a
+      // Failure, never an exception. A double that lets it escape would
+      // have tests passing against behaviour production does not have.
+      //
+      // Production reports both: onResponse (already sent by _respond) for
+      // the HTTP call, then onFailure for the body it could not parse.
+      try {
+        return right<Failure, T>(parser(response.data));
+      } catch (_) {
+        final failure = Failure(
+          ErrorSource.parseError,
+          ResponseCode.parseError,
+          ResponseStrings.parseError,
+          data: response.data,
+          statusCode: response.statusCode,
+          requestOptions: response.requestOptions,
+        );
+        _observe((o) => o.onFailure(failure, failure.requestOptions));
+        return left<Failure, T>(failure);
+      }
+    });
   }
 
   @override
@@ -281,12 +348,17 @@ class FakeApiServices implements ApiServices {
     ResponseType? responseType,
     String? tag,
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
     bool dedupe = true,
   }) {
-    return _respond(HttpMethod.get, endpoint,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.get,
+      endpoint,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -304,12 +376,18 @@ class FakeApiServices implements ApiServices {
     ResponseType? responseType,
     String? tag,
     bool showLoader = true,
-    CachePolicy? cachePolicy,
-    Duration? cacheMaxAge,
     bool dedupe = true,
   }) {
-    return _respondAs(HttpMethod.get, endpoint, parser,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respondAs(
+      HttpMethod.get,
+      endpoint,
+      parser,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -327,8 +405,15 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respond(HttpMethod.post, endpoint,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.post,
+      endpoint,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -347,8 +432,16 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respondAs(HttpMethod.post, endpoint, parser,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respondAs(
+      HttpMethod.post,
+      endpoint,
+      parser,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -366,8 +459,15 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respond(HttpMethod.put, endpoint,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.put,
+      endpoint,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -386,8 +486,16 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respondAs(HttpMethod.put, endpoint, parser,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respondAs(
+      HttpMethod.put,
+      endpoint,
+      parser,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -405,8 +513,15 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respond(HttpMethod.delete, endpoint,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.delete,
+      endpoint,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -425,8 +540,16 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respondAs(HttpMethod.delete, endpoint, parser,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respondAs(
+      HttpMethod.delete,
+      endpoint,
+      parser,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -444,8 +567,15 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respond(HttpMethod.patch, endpoint,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.patch,
+      endpoint,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -464,8 +594,16 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respondAs(HttpMethod.patch, endpoint, parser,
-        data: data, params: params, headers: headers, tag: tag);
+    return _respondAs(
+      HttpMethod.patch,
+      endpoint,
+      parser,
+      data: data,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -480,8 +618,15 @@ class FakeApiServices implements ApiServices {
     bool showLoader = true,
     bool dedupe = true,
   }) {
-    return _respond(HttpMethod.head, endpoint,
-        params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.head,
+      endpoint,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+      evaluate: false,
+    );
   }
 
   @override
@@ -497,8 +642,14 @@ class FakeApiServices implements ApiServices {
     bool showLoader = true,
     bool dedupe = true,
   }) {
-    return _respond(HttpMethod.options, endpoint,
-        params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.options,
+      endpoint,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -517,8 +668,16 @@ class FakeApiServices implements ApiServices {
     String? tag,
     bool showLoader = true,
   }) {
-    return _respond(method, endpoint,
-        data: fields, params: params, headers: headers, files: files, tag: tag);
+    return _respond(
+      method,
+      endpoint,
+      data: fields,
+      params: params,
+      headers: headers,
+      files: files,
+      tag: tag,
+      cancelToken: cancelToken,
+    );
   }
 
   @override
@@ -535,8 +694,16 @@ class FakeApiServices implements ApiServices {
     bool deleteOnError = true,
     bool showLoader = true,
   }) {
-    return _respond(HttpMethod.get, endpoint,
-        data: savePath, params: params, headers: headers, tag: tag);
+    return _respond(
+      HttpMethod.get,
+      endpoint,
+      data: savePath,
+      params: params,
+      headers: headers,
+      tag: tag,
+      cancelToken: cancelToken,
+      evaluate: false,
+    );
   }
 
   @override
