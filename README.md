@@ -13,9 +13,9 @@ result.fold(
 );
 ```
 
-> **Upgrading from 3.x?** 4.0.0 requires Flutter 3.32 (Dart 3.8), removes response caching and the `api_cache_manager` dependency, and adds `ErrorSource.gatewayTimeout` — see [MIGRATION.md](MIGRATION.md).
+> **Upgrading from 2.0.0?** 3.0.0 and 3.1.0 were never published, so the next version on pub.dev after 2.0.0 is 4.0.0. Follow both the 3.0.0 and 4.0.0 sections of [MIGRATION.md](MIGRATION.md). The most common steps: raise `equatable` to 3, replace the removed `configure()`, `setConnectivityCheck()` and `setLogging()` with `ApiServices.init(ApiConfig(...))`, move to Flutter 3.32 (Dart 3.8), drop any response-caching configuration, and add a case for `ErrorSource.gatewayTimeout` if you switch exhaustively. Coming from 1.x, follow the 2.0.0 section of the same guide first.
 >
-> **Upgrading from 2.x?** 3.0.0 requires `equatable` 3 and removes the deprecated `configure()`, `setConnectivityCheck()` and `setLogging()`. [MIGRATION.md](MIGRATION.md) lists every change with its fix. Coming from 1.x, follow the 2.0.0 section of the same guide first.
+> **Using 3.x from git?** 4.0.0 requires Flutter 3.32 (Dart 3.8), removes response caching and the `api_cache_manager` dependency, and adds `ErrorSource.gatewayTimeout` — see the 4.0.0 section of [MIGRATION.md](MIGRATION.md).
 
 ## Table of Contents
 
@@ -236,6 +236,8 @@ final result = await api.download(
 );
 ```
 
+Downloads, and requests with `responseType: ResponseType.bytes` or `stream`, send `Accept: */*` unless you pass your own `headers` — a JSON `Accept` gets a `406` from servers that honour it, static file handlers in particular.
+
 ### Cancellation
 
 `cancelRequest()` cancels every in-flight request:
@@ -270,12 +272,13 @@ For a single request, pass your own `CancelToken`.
 
 | Field | Description |
 | --- | --- |
-| `message` | Human-readable. Extracted from the body's `message`, `detail`, or `error` key, falling back to a generic string for the status. |
+| `message` | Human-readable. Extracted from the body's `message`, `detail`, `error` or `msg` key, then the field messages under `errors`, then `title` (ASP.NET's problem details), falling back to a generic string for the status. |
 | `errorType` | `ErrorSource` — semantic enum (`notFound`, `unauthorized`, `parseError`, …). |
 | `code` | `ResponseCode` — enum with an integer `value`. Collapses unrecognised statuses to `defaultError`. |
 | `statusCode` | The literal HTTP status, e.g. `418`. `null` for failures that never reached the server. |
 | `data` | The raw response body. `null` for offline, timeout, and cancellation. |
 | `validationErrors` | Per-field errors parsed from an `errors` object. `null` when absent. |
+| `errorCode` | The server's own code — `code` or `errorCode`, top level or inside `error`. `null` when absent. |
 | `requestOptions` | The request that failed — method, path, headers. `null` when none was built. Excluded from equality. |
 
 ### Validation errors
@@ -329,6 +332,40 @@ Return `null` to fall back to the generic failure. It is only consulted when `is
 
 `isSuccess` is not applied to `head()` or `download()` — neither has a body in `response.data` to judge.
 
+### Mapping failures for your app
+
+`mapFailure` sees every `Failure` before the caller does — HTTP errors, timeouts, offline, cancellation, parse errors, and rejected bodies — so app-specific wording and codes live in one place instead of every repository:
+
+```dart
+ApiServices.init(ApiConfig(
+  mapFailure: (failure) {
+    // A 401 from login is a wrong password, not an expired session.
+    if (failure.statusCode == 401 &&
+        failure.requestOptions?.path == '/auth/login') {
+      return Failure(
+        ErrorSource.unauthorized,
+        ResponseCode.unauthorized,
+        'Wrong employee ID or password.',
+        data: failure.data,
+        statusCode: 401,
+      );
+    }
+    if (failure.errorCode == 'ACCOUNT_LOCKED') {
+      return Failure(
+        failure.errorType,
+        failure.code,
+        'Your account is locked. Contact HR.',
+        data: failure.data,
+        statusCode: failure.statusCode,
+      );
+    }
+    return null; // keep it as it is
+  },
+));
+```
+
+A returned failure without `requestOptions` gets the original's. The observer reports the mapped failure, and `FakeApiServices` applies the mapper too. A mapper that throws leaves the failure unchanged.
+
 ---
 
 ## Authentication
@@ -362,6 +399,72 @@ AuthConfig(
 ```
 
 Omit `auth` entirely for an unauthenticated client; `401`s then surface as an ordinary `Failure`.
+
+### Login, logout and other requests that must not refresh
+
+A `401` from the login endpoint means a wrong password. Without help, it starts a refresh with nothing to refresh, which fails and fires `onRefreshFailed` — logging the user "out" of the login screen. Name those requests in `skipRefresh`:
+
+```dart
+auth: AuthConfig(
+  getToken: getToken,
+  onTokenRefresh: refresh,
+  skipRefresh: (options) => const {
+    '/auth/login',
+    '/auth/refresh',
+    '/auth/logout',
+  }.contains(options.path),
+),
+```
+
+Their `401` surfaces as an ordinary `Failure`. They still carry the token when there is one, since logout usually needs it.
+
+### Keeping the session when a refresh can't be tried
+
+`onTokenRefresh` returns a `bool`, so a refresh that failed because the device was offline ends the session just as a refused refresh token does. Use `refreshSession` instead to tell the two apart:
+
+```dart
+auth: AuthConfig(
+  getToken: getToken,
+  refreshSession: () async {
+    try {
+      await authRepository.refresh();
+      return RefreshOutcome.refreshed;
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      return status == 400 || status == 401 || status == 403
+          ? RefreshOutcome.sessionExpired   // fires onRefreshFailed
+          : RefreshOutcome.failed;          // keeps the session
+    }
+  },
+  onRefreshFailed: () => authController.logout(),
+),
+```
+
+| Outcome | Waiting requests | `onRefreshFailed` |
+| --- | --- | --- |
+| `refreshed` | Replayed with the new token. | — |
+| `sessionExpired` | Fail with their `401`. | Fires. |
+| `failed` | Fail with their `401`; a later request tries again. | Does not fire. |
+
+Supply exactly one of `onTokenRefresh` and `refreshSession`. A throw from `refreshSession` counts as `failed`; a throw from `onTokenRefresh` still ends the session, as before.
+
+### Refreshing before the token expires
+
+With `isTokenExpired`, a request whose token has run out refreshes *before* it is sent, instead of spending a round trip on a `401`:
+
+```dart
+auth: AuthConfig(
+  getToken: getToken,
+  refreshSession: refresh,
+  isTokenExpired: () async {
+    final expiresAt = await storage.readExpiry();
+    return expiresAt != null &&
+        DateTime.now().add(const Duration(seconds: 30)).isAfter(expiresAt);
+  },
+),
+```
+
+Concurrent requests share the one refresh. If it ends the session, the request is not sent and fails as a `401` (`ErrorSource.unauthorized`); if it merely fails, the request goes out with the token it has, and a `401` for it does not try the refresh again. Not asked for `skipRefresh` requests, or for requests made by the refresh itself. A throwing check counts as "not expired".
 
 ### Which hosts get the token
 
@@ -715,13 +818,14 @@ Every field on `ApiConfig`:
 | `retry` | `RetryPolicy()` | How transient failures are retried. |
 | `isSuccess` | `null` | Reject a `2xx` whose body says otherwise. |
 | `onRejected` | `null` | Builds the `Failure` for a response `isSuccess` rejected. |
+| `mapFailure` | `null` | Rewrites any `Failure` before the caller sees it. |
 | `httpClientAdapter` | `null` | Certificate pinning, proxies. |
 | `observer` | `null` | Request/response/failure hook. |
 | `interceptors` | `[]` | Your own Dio interceptors, inserted after auth and before retry. |
 | `maxConcurrentRequests` | `null` | Cap on requests in flight at once. Unlimited when unset; must be positive. A token refresh made through the client is never queued behind it. |
 | `auth` | `null` | Token auth and refresh. |
 
-Settings read at request time take effect immediately: `bypassConnectivityCheck`, `isSuccess`, `onRejected`, and the observer's `onResponse`/`onFailure`. The rest are fixed when `init` builds the client, so changing them means calling `init` again: `baseUrl`, timeouts, `defaultHeaders`, `logging`, `retry`, `auth`, `interceptors`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and the observer's `onRequest`.
+Settings read at request time take effect immediately: `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `mapFailure`, and the observer's `onResponse`/`onFailure`. The rest are fixed when `init` builds the client, so changing them means calling `init` again: `baseUrl`, timeouts, `defaultHeaders`, `logging`, `retry`, `auth`, `interceptors`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests`, and the observer's `onRequest`.
 
 ---
 

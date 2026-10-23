@@ -32,7 +32,7 @@ Two identical entrypoints: `lib/baaba_api_handler.dart` (conventional) and `lib/
 
 Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `RetryPolicy`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`/`HttpMethodExtension`, `listParser`, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions`/`ResponseType` (Dio).
 
-Current version: **4.0.0**. SDK floor: Dart 3.8 / Flutter 3.32 — the oldest the dev tooling (`flutter_lints` 6) can actually build, so the constraint never claims more than is tested.
+Current version: **4.0.0**. Latest on pub.dev is **2.0.0** — 3.0.0 and 3.1.0 were never published, so 4.0.0 is the next release there and its CHANGELOG/MIGRATION entries must stay readable for someone jumping straight from 2.0.0. Until 4.0.0 is published, new changes go into the 4.0.0 section rather than a new version. SDK floor: Dart 3.8 / Flutter 3.32 — the oldest the dev tooling (`flutter_lints` 6) can actually build, so the constraint never claims more than is tested.
 
 Response caching (`CachePolicy`, `ApiCacheHelper`, the `api_cache_manager`/SQLite dependency) was removed in 4.0.0. Don't reintroduce a persistence dependency without discussing it — the package deliberately persists nothing.
 
@@ -124,6 +124,10 @@ A `401` on a request made *from inside* `onTokenRefresh` (`isInsideTokenRefresh`
 
 `refreshTimeout` now only bounds an `onTokenRefresh` that never completes. The same zone check keeps such a request out of de-duplication.
 
+Internally every refresh resolves to a `RefreshOutcome`. `onTokenRefresh` (bool) maps `false` *and a throw* to `sessionExpired`; `refreshSession` maps a throw to `failed`. Only `sessionExpired` fires `onRefreshFailed`; waiters timing out on `refreshTimeout` count as `failed`. Exactly one of the two callbacks is set (asserted).
+
+`skipRefresh` exempts a request from both refresh paths but not from carrying the token; a throwing predicate exempts nothing. `isTokenExpired` triggers a **proactive** refresh in `onRequest` via `_sharedRefresh`, which joins a running refresh or starts one and clears the guard itself (no replay to hold it for). `sessionExpired` rejects the request unsent as a synthetic `401`; `failed` sends it with the old token and marks `extra['_tokenRefreshFailed']`, so its `401` does not start a second refresh immediately.
+
 > **`_retryRequest` must be `await`ed, not merely returned.** The `finally` that clears `_isRefreshing`/`_refreshCompleter` runs as soon as the returned future is *produced*, not when it completes, so an un-awaited return releases the guard while the replay is still in flight. A 401 arriving in that window then sees no refresh in progress and starts a second one — exactly the stampede the guard exists to prevent, and worse against a backend that rotates refresh tokens. `unawaited_return_in_try_block` catches a regression here; `test/token_refresh_interceptor_test.dart` pins the behaviour.
 
 ### Retries (`src/config/retry_policy.dart`)
@@ -152,6 +156,8 @@ Skipped when the caller supplies a `CancelToken` — sharing one network call wo
 > **Notification happens in exactly one place: `_notify`, called from `_sendRequest`** — the outermost layer, which runs once per *caller*. It must not move deeper. `_dispatch` and `_performRequest` are shared: de-duplication collapses two callers onto one `_performRequest`, so notifying from there emits one event for two calls. `download()` and `upload()`'s file-read failure bypass `_sendRequest` and call `_notify` themselves.
 
 Inner layers therefore return failures without reporting them; they attach `Failure.requestOptions` (via `withRequest`) so `_notify` can pass the request along. `requestOptions` is excluded from `props` — `RequestOptions` has no value equality, so including it would make every real failure unequal to every other.
+
+`ApiConfig.mapFailure` is applied in the same place — inside `_notify`, and in `_parse` for parse errors — via `mapFailure()` (`src/utils/failure_mapper.dart`), shared with `FakeApiServices._report`. Per caller, so the observer sees the mapped failure; a throwing mapper leaves the failure unchanged.
 
 A `*As<T>` parse failure fires **both** `onResponse` (the HTTP call succeeded) and `onFailure` (the body could not be understood). Two real events; `_parse` runs per caller so it needs no special handling.
 

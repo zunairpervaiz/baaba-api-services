@@ -7,6 +7,7 @@ import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 import 'package:baaba_api_handler/src/utils/failure.dart';
+import 'package:baaba_api_handler/src/utils/failure_mapper.dart';
 import 'package:baaba_api_handler/src/utils/http_methods.dart';
 import 'package:baaba_api_handler/src/utils/network_info.dart';
 import 'package:baaba_api_handler/src/utils/request_key.dart';
@@ -675,6 +676,9 @@ class ApiServicesImplementation implements ApiServices {
     accept: applicationJson,
   };
 
+  /// For downloads and binary responses, which may be any type at all.
+  static const Map<String, String> _anyContent = {accept: anyMediaType};
+
   // Tracks every active CancelToken, against the tags of the requests using
   // it (null for one made without a tag), so cancelRequest() can cancel
   // either everything or just one screen's worth.
@@ -730,7 +734,10 @@ class ApiServicesImplementation implements ApiServices {
   /// Reports an outcome to the observer and passes it straight through.
   Either<Failure, Response> _notify(Either<Failure, Response> result) {
     return result.fold(
-      (failure) {
+      (raw) {
+        // Mapped here, at the per-caller exit, so the observer reports what
+        // the caller actually receives.
+        final failure = mapFailure(raw, ApiServices._config);
         _notifyFailure(failure, failure.requestOptions);
         return left(failure);
       },
@@ -815,7 +822,7 @@ class ApiServicesImplementation implements ApiServices {
             receiveTimeout: call.receiveTimeout,
             sendTimeout: call.sendTimeout,
             responseType: call.responseType,
-            headers: _headersFor(call.data, call.headers),
+            headers: _headersFor(call.data, call.headers, call.responseType),
           ),
           cancelToken: token,
           onSendProgress: call.onSendProgress,
@@ -896,7 +903,21 @@ class ApiServicesImplementation implements ApiServices {
   /// and the server would reject the upload. That applies to a caller's own
   /// headers too, not just the default set: an upload that also needs an
   /// `X-Tenant-Id` should not have to know to omit the content type.
-  Map<String, String> _headersFor(Object? data, Map<String, String>? headers) {
+  Map<String, String> _headersFor(
+    Object? data,
+    Map<String, String>? headers,
+    ResponseType? responseType,
+  ) {
+    // A caller asking for bytes or a stream wants a file, not JSON. Sending
+    // `Accept: application/json` for one gets a 406 from servers that honour
+    // it — static file handlers in particular.
+    if (headers == null &&
+        (responseType == ResponseType.bytes ||
+            responseType == ResponseType.stream)) {
+      return data is FormData
+          ? _anyContent
+          : {..._defaultHeader, ..._anyContent};
+    }
     if (data is! FormData) return headers ?? _defaultHeader;
     if (headers == null) return {accept: applicationJson};
 
@@ -1011,15 +1032,18 @@ class ApiServicesImplementation implements ApiServices {
       } catch (_) {
         // The HTTP call already reported success — this is a second,
         // distinct event: the response arrived and could not be understood.
-        final failure = Failure(
-          ErrorSource.parseError,
-          ResponseCode.parseError,
-          ResponseStrings.parseError,
-          data: response.data,
-          statusCode: response.statusCode,
-          requestOptions: response.requestOptions,
+        final failure = mapFailure(
+          Failure(
+            ErrorSource.parseError,
+            ResponseCode.parseError,
+            ResponseStrings.parseError,
+            data: response.data,
+            statusCode: response.statusCode,
+            requestOptions: response.requestOptions,
+          ),
+          ApiServices._config,
         );
-        _notifyFailure(failure, response.requestOptions);
+        _notifyFailure(failure, failure.requestOptions);
         return left(failure);
       }
     });
@@ -1529,7 +1553,7 @@ class ApiServicesImplementation implements ApiServices {
               options: Options(
                 receiveTimeout: receiveTimeout,
                 sendTimeout: sendTimeout,
-                headers: headers ?? _defaultHeader,
+                headers: headers ?? _anyContent,
               ),
               cancelToken: token,
               onReceiveProgress: onReceiveProgress,

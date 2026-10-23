@@ -1,4 +1,5 @@
 const String applicationJson = "application/json";
+const String anyMediaType = "*/*";
 const String contentType = "content-type";
 const String accept = "accept";
 const String authorization = "authorization";
@@ -8,3 +9,6 @@ const String errorKey = 'error';
 const String detailKey = "detail";
 const String msgKey = 'msg';
 const String errorsKey = 'errors';
+const String titleKey = 'title';
+const String codeKey = 'code';
+const String errorCodeKey = 'errorCode';

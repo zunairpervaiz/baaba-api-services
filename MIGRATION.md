@@ -1,6 +1,10 @@
 # Migrating to 4.0.0
 
+> **Coming from 2.0.0 on pub.dev?** 3.0.0 was never published, so its changes arrive with 4.0.0 too. Do [Migrating to 3.0.0](#migrating-to-300) first, then this section.
+
 4.0.0 requires Dart 3.8 / Flutter 3.32, and removes response caching along with the `api_cache_manager` dependency (and transitively `sqflite`). Every request now goes to the network. Apps already on Flutter 3.32+ that never passed a `cachePolicy` only need to delete any leftover cache configuration and, if they switch exhaustively over `ErrorSource` or `ResponseCode`, add a case for the new `gatewayTimeout`. 4.0.0 also stops applying `isSuccess` to `head()`.
+
+Reading `AuthConfig.onTokenRefresh` — rare outside tests — now needs a null check: the field is nullable, since `refreshSession` is the alternative to it. Passing it is unchanged.
 
 ## 0. Flutter 3.32 / Dart 3.8 or newer
 

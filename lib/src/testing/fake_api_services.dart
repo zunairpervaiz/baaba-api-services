@@ -3,6 +3,7 @@ import 'package:baaba_api_handler/src/observer/api_observer.dart';
 import 'package:baaba_api_handler/src/utils/error_handler.dart';
 import 'package:baaba_api_handler/src/utils/error_source_extension.dart';
 import 'package:baaba_api_handler/src/utils/failure.dart';
+import 'package:baaba_api_handler/src/utils/failure_mapper.dart';
 import 'package:baaba_api_handler/src/utils/http_methods.dart';
 import 'package:baaba_api_handler/src/utils/response_code.dart';
 import 'package:baaba_api_handler/src/utils/response_strings.dart';
@@ -273,12 +274,15 @@ class FakeApiServices implements ApiServices {
   /// Reports an outcome to `ApiConfig.observer`, once per call, as the real
   /// client does, and passes it through.
   Either<Failure, Response> _report(Either<Failure, Response> result) {
-    result.fold(
+    // ApiConfig.mapFailure applies here as at the real client's exit, so a
+    // consumer's mapping runs in their tests.
+    final mapped = result.mapLeft((f) => mapFailure(f, ApiServices.config));
+    mapped.fold(
       (failure) =>
           _observe((o) => o.onFailure(failure, failure.requestOptions)),
       (response) => _observe((o) => o.onResponse(response)),
     );
-    return result;
+    return mapped;
   }
 
   /// Calls the configured observer, if any. A throwing observer never breaks
@@ -320,13 +324,16 @@ class FakeApiServices implements ApiServices {
       try {
         return right<Failure, T>(parser(response.data));
       } catch (_) {
-        final failure = Failure(
-          ErrorSource.parseError,
-          ResponseCode.parseError,
-          ResponseStrings.parseError,
-          data: response.data,
-          statusCode: response.statusCode,
-          requestOptions: response.requestOptions,
+        final failure = mapFailure(
+          Failure(
+            ErrorSource.parseError,
+            ResponseCode.parseError,
+            ResponseStrings.parseError,
+            data: response.data,
+            statusCode: response.statusCode,
+            requestOptions: response.requestOptions,
+          ),
+          ApiServices.config,
         );
         _observe((o) => o.onFailure(failure, failure.requestOptions));
         return left<Failure, T>(failure);

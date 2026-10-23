@@ -168,6 +168,46 @@ class ApiConfig {
   /// than turning a response into an exception.
   final Failure? Function(Response response)? onRejected;
 
+  /// Rewrites a [Failure] before the caller sees it — the one place to turn
+  /// the package's generic failures into your app's own.
+  ///
+  /// Called for every `Left` the client returns: HTTP errors, timeouts, the
+  /// offline short-circuit, cancellation, parse errors, and bodies rejected by
+  /// [isSuccess] (after [onRejected]). Return `null` to keep the failure as
+  /// it is.
+  ///
+  /// ```dart
+  /// mapFailure: (failure) {
+  ///   // A 401 from login is a wrong password, not an expired session.
+  ///   if (failure.statusCode == 401 &&
+  ///       failure.requestOptions?.path == '/auth/login') {
+  ///     return Failure(
+  ///       ErrorSource.unauthorized,
+  ///       ResponseCode.unauthorized,
+  ///       'Wrong employee ID or password.',
+  ///       data: failure.data,
+  ///       statusCode: 401,
+  ///     );
+  ///   }
+  ///   // {"code": "ACCOUNT_LOCKED", ...} in the body.
+  ///   if (failure.errorCode == 'ACCOUNT_LOCKED') {
+  ///     return Failure(
+  ///       failure.errorType,
+  ///       failure.code,
+  ///       'Your account is locked. Contact HR.',
+  ///       data: failure.data,
+  ///       statusCode: failure.statusCode,
+  ///     );
+  ///   }
+  ///   return null;
+  /// },
+  /// ```
+  ///
+  /// A returned failure without `requestOptions` gets the original's, so the
+  /// observer still knows which call it was. The observer sees the mapped
+  /// failure. Must not throw — one that does leaves the failure unchanged.
+  final Failure? Function(Failure failure)? mapFailure;
+
   /// Replaces Dio's default HTTP adapter.
   ///
   /// Supply your own to pin certificates, or to route through a debugging
@@ -249,6 +289,7 @@ class ApiConfig {
     this.retry = const RetryPolicy(),
     this.isSuccess,
     this.onRejected,
+    this.mapFailure,
     this.httpClientAdapter,
     this.observer,
     this.interceptors = const [],
@@ -283,6 +324,7 @@ class ApiConfig {
     RetryPolicy? retry,
     bool Function(Response response)? isSuccess,
     Failure? Function(Response response)? onRejected,
+    Failure? Function(Failure failure)? mapFailure,
     HttpClientAdapter? httpClientAdapter,
     ApiObserver? observer,
     List<Interceptor>? interceptors,
@@ -303,6 +345,7 @@ class ApiConfig {
       retry: retry ?? this.retry,
       isSuccess: isSuccess ?? this.isSuccess,
       onRejected: onRejected ?? this.onRejected,
+      mapFailure: mapFailure ?? this.mapFailure,
       httpClientAdapter: httpClientAdapter ?? this.httpClientAdapter,
       observer: observer ?? this.observer,
       interceptors: interceptors ?? this.interceptors,

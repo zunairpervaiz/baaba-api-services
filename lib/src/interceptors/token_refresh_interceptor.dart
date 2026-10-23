@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:baaba_api_handler/src/config/auth_config.dart';
+import 'package:baaba_api_handler/src/config/refresh_outcome.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/refresh_zone.dart';
 import 'package:baaba_api_handler/src/utils/replayable_request.dart';
@@ -22,12 +23,26 @@ class TokenRefreshInterceptor extends Interceptor {
   final Future<String?> Function() getToken;
 
   /// Performs the token refresh. Should return `true` if the token was
-  /// successfully refreshed, `false` otherwise.
-  final Future<bool> Function() onTokenRefresh;
+  /// successfully refreshed, `false` otherwise. See
+  /// [AuthConfig.onTokenRefresh].
+  final Future<bool> Function()? onTokenRefresh;
 
-  /// Called when the token refresh fails (e.g. refresh endpoint returns 401
-  /// or [onTokenRefresh] throws). Use this to trigger a logout.
+  /// Performs the token refresh, reporting why it failed. See
+  /// [AuthConfig.refreshSession]. Exactly one of this and [onTokenRefresh] is
+  /// set.
+  final Future<RefreshOutcome> Function()? refreshSession;
+
+  /// Called when the session is over (e.g. the refresh endpoint returns 401).
+  /// Use this to trigger a logout.
   final void Function()? onRefreshFailed;
+
+  /// Asked before a request that carries the token; `true` refreshes first.
+  /// See [AuthConfig.isTokenExpired].
+  final FutureOr<bool> Function()? isTokenExpired;
+
+  /// Requests whose `401` must not trigger a refresh. See
+  /// [AuthConfig.skipRefresh].
+  final bool Function(RequestOptions options)? skipRefresh;
 
   /// Builds the auth headers merged into every request from the token value.
   ///
@@ -84,17 +99,24 @@ class TokenRefreshInterceptor extends Interceptor {
   /// was sent under, so a `401` can tell — synchronously — that a refresh has
   /// already happened since.
   int _generation = 0;
-  Completer<bool>? _refreshCompleter;
+  Completer<RefreshOutcome>? _refreshCompleter;
 
   TokenRefreshInterceptor({
     required Dio dio,
     required this.getToken,
-    required this.onTokenRefresh,
+    this.onTokenRefresh,
+    this.refreshSession,
     this.onRefreshFailed,
+    this.isTokenExpired,
+    this.skipRefresh,
     this.headerBuilder,
     this.sendTokenTo,
     this.refreshTimeout = const Duration(seconds: 30),
-  }) : _dio = dio;
+  }) : assert(
+         (onTokenRefresh == null) != (refreshSession == null),
+         'Supply exactly one of onTokenRefresh and refreshSession.',
+       ),
+       _dio = dio;
 
   /// Builds the interceptor from the [AuthConfig] held by `ApiConfig`.
   factory TokenRefreshInterceptor.fromConfig({
@@ -105,7 +127,10 @@ class TokenRefreshInterceptor extends Interceptor {
       dio: dio,
       getToken: config.getToken,
       onTokenRefresh: config.onTokenRefresh,
+      refreshSession: config.refreshSession,
       onRefreshFailed: config.onRefreshFailed,
+      isTokenExpired: config.isTokenExpired,
+      skipRefresh: config.skipRefresh,
       headerBuilder: config.headerBuilder,
       sendTokenTo: config.sendTokenTo,
       refreshTimeout: config.refreshTimeout,
@@ -152,12 +177,56 @@ class TokenRefreshInterceptor extends Interceptor {
     return uri.host == baseHost;
   }
 
+  /// Whether [AuthConfig.skipRefresh] exempts this request. A throwing
+  /// predicate exempts nothing, so auth keeps working as it did without one.
+  bool _isExempt(RequestOptions options) {
+    final predicate = skipRefresh;
+    if (predicate == null) return false;
+    try {
+      return predicate(options);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Whether the token should be renewed before this request goes out.
+  Future<bool> _needsProactiveRefresh(RequestOptions options) async {
+    final check = isTokenExpired;
+    // Inside the refresh, the refresh request itself would wait on the very
+    // refresh it belongs to.
+    if (check == null || isInsideTokenRefresh || _isExempt(options)) {
+      return false;
+    }
+    try {
+      return await check();
+    } catch (_) {
+      // The server's 401 is the backstop.
+      return false;
+    }
+  }
+
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
     if (!_shouldAttach(options)) return handler.next(options);
+
+    if (await _needsProactiveRefresh(options)) {
+      final outcome = await _sharedRefresh();
+      if (outcome == RefreshOutcome.sessionExpired) {
+        // Sending it would only earn the 401 the refresh just predicted, and
+        // a second refresh attempt for it would fire onRefreshFailed twice.
+        // Rejected as that 401, so the caller sees ErrorSource.unauthorized.
+        return handler.reject(_sessionExpired(options));
+      }
+      // RefreshOutcome.failed: send with the token we have and let the server
+      // decide, rather than failing a request that may well succeed. Marked,
+      // so its 401 does not try the refresh that just failed a second time.
+      if (outcome == RefreshOutcome.failed) {
+        options.extra[_refreshFailedKey] = true;
+      }
+    }
 
     // Read before the await. A refresh can finish while getToken() is
     // running, and a request that read the old token but recorded the new
@@ -192,9 +261,13 @@ class TokenRefreshInterceptor extends Interceptor {
     // expired refresh token. It must neither start a refresh nor wait for one:
     // the refresh it would wait on is its own, so it sat out the whole
     // refreshTimeout, loader up, before the user was signed out.
+    //
+    // A 401 from a request skipRefresh names — login, logout — is an answer
+    // about the request, not about the session.
     if (err.response?.statusCode != 401 ||
         isInsideTokenRefresh ||
         !_shouldAttach(err.requestOptions) ||
+        _isExempt(err.requestOptions) ||
         _isAlreadyRetried(err.requestOptions)) {
       return handler.next(err);
     }
@@ -243,37 +316,22 @@ class TokenRefreshInterceptor extends Interceptor {
     // lag than expiry, and against a backend that rotates refresh tokens a
     // second refresh can sign the user out.
     if (_isRefreshing) {
-      final refreshed = await _refreshCompleter!.future.timeout(
-        refreshTimeout,
-        onTimeout: () => false,
-      );
-      if (refreshed) {
+      if (await _awaitRunningRefresh() == RefreshOutcome.refreshed) {
         return _retryRequest(err, handler);
       }
       return handler.next(err);
     }
 
-    _isRefreshing = true;
-    final completer = _refreshCompleter = Completer<bool>();
+    // Its proactive refresh already failed on the way out. Trying again at
+    // once doubles the refresh traffic of every request while offline, and
+    // against a backend that rotates refresh tokens a retry after a timeout
+    // the server did act on can sign the user out.
+    if (err.requestOptions.extra[_refreshFailedKey] == true) {
+      return handler.next(err);
+    }
 
     try {
-      // Only the refresh itself may count as a failed refresh. A replay that
-      // threw after a *successful* one used to land in a catch around both,
-      // which completed the completer a second time — so the request failed
-      // with "Future already completed" in place of the real error — and
-      // which would then have fired onRefreshFailed, signing out a user
-      // whose session had just been renewed.
-      final refreshed = await _refresh();
-      if (refreshed) _generation++;
-      completer.complete(refreshed);
-
-      if (!refreshed) {
-        // Guarded: it is usually logout navigation, which can throw, and the
-        // caller must still see the 401 rather than that exception — code
-        // checking `errorType == ErrorSource.unauthorized` depends on it.
-        try {
-          onRefreshFailed?.call();
-        } catch (_) {}
+      if (await _startRefresh() != RefreshOutcome.refreshed) {
         return handler.next(err);
       }
 
@@ -299,19 +357,90 @@ class TokenRefreshInterceptor extends Interceptor {
     }
   }
 
-  /// Runs [onTokenRefresh], treating a throw as a failed refresh.
+  /// Joins the refresh in flight, or starts one. For the proactive path,
+  /// which — unlike a 401 — has no replay to hold the guard for.
+  Future<RefreshOutcome> _sharedRefresh() async {
+    if (_isRefreshing) return _awaitRunningRefresh();
+    try {
+      return await _startRefresh();
+    } finally {
+      _isRefreshing = false;
+      _refreshCompleter = null;
+    }
+  }
+
+  /// Waits for the refresh another request started. Bounded by
+  /// [refreshTimeout], so a refresh that never completes cannot hang every
+  /// request behind it; running out counts as [RefreshOutcome.failed], which
+  /// does not end the session.
+  Future<RefreshOutcome> _awaitRunningRefresh() => _refreshCompleter!.future
+      .timeout(refreshTimeout, onTimeout: () => RefreshOutcome.failed);
+
+  /// Starts the refresh, publishing its outcome to every request waiting on
+  /// it, and fires [onRefreshFailed] when the session is over.
   ///
-  /// A plain try/catch rather than `.catchError((_) => false)`: an
+  /// Must be called synchronously after seeing `_isRefreshing` false, so two
+  /// callers cannot both start one. Does not clear the guard: the caller does,
+  /// in a `finally`, once it is done with whatever must happen under it.
+  Future<RefreshOutcome> _startRefresh() async {
+    _isRefreshing = true;
+    final completer = _refreshCompleter = Completer<RefreshOutcome>();
+
+    // Only the refresh itself may count as a failed refresh. A replay that
+    // threw after a *successful* one used to land in a catch around both,
+    // which completed the completer a second time — so the request failed
+    // with "Future already completed" in place of the real error — and which
+    // would then have fired onRefreshFailed, signing out a user whose session
+    // had just been renewed.
+    final outcome = await _refresh();
+    if (outcome == RefreshOutcome.refreshed) _generation++;
+    completer.complete(outcome);
+
+    if (outcome == RefreshOutcome.sessionExpired) {
+      // Guarded: it is usually logout navigation, which can throw, and the
+      // caller must still see the 401 rather than that exception — code
+      // checking `errorType == ErrorSource.unauthorized` depends on it.
+      try {
+        onRefreshFailed?.call();
+      } catch (_) {}
+    }
+    return outcome;
+  }
+
+  /// Runs the configured refresh callback.
+  ///
+  /// A throw from [onTokenRefresh] ends the session, as it always has; a
+  /// throw from [refreshSession] does not, since that callback has
+  /// [RefreshOutcome.sessionExpired] to say so explicitly.
+  ///
+  /// A plain try/catch rather than `.catchError(...)`: an
   /// `() async => throw ...` callback has the runtime type `Future<Never>`,
-  /// and `catchError` on that rejects a `false` with a `TypeError`.
-  Future<bool> _refresh() async {
+  /// and `catchError` on that rejects a fallback value with a `TypeError`.
+  Future<RefreshOutcome> _refresh() async {
+    final withOutcome = refreshSession;
     try {
       // Marked, so a refresh request made through the same client is not
       // queued behind the requests waiting on it. See refresh_zone.dart.
-      return await runAsTokenRefresh(onTokenRefresh);
+      if (withOutcome != null) return await runAsTokenRefresh(withOutcome);
+      final refreshed = await runAsTokenRefresh(onTokenRefresh!);
+      return refreshed
+          ? RefreshOutcome.refreshed
+          : RefreshOutcome.sessionExpired;
     } catch (_) {
-      return false;
+      return withOutcome != null
+          ? RefreshOutcome.failed
+          : RefreshOutcome.sessionExpired;
     }
+  }
+
+  /// The `401` a request would have earned, for one rejected before sending
+  /// because the proactive refresh found the session over.
+  static DioException _sessionExpired(RequestOptions options) {
+    return DioException.badResponse(
+      statusCode: 401,
+      requestOptions: options,
+      response: Response<dynamic>(requestOptions: options, statusCode: 401),
+    );
   }
 
   /// Replays the request with the fresh token. Never throws: whatever goes
@@ -351,6 +480,7 @@ class TokenRefreshInterceptor extends Interceptor {
 
   static const String _sentTokenKey = '_tokenSent';
   static const String _generationKey = '_tokenGeneration';
+  static const String _refreshFailedKey = '_tokenRefreshFailed';
 
   bool _isAlreadyRetried(RequestOptions options) {
     return options.extra['_tokenRetried'] == true;

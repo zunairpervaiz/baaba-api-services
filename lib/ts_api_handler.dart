@@ -28,6 +28,7 @@ export 'package:fpdart/fpdart.dart' show Either, Left, Right;
 export 'src/api_service.dart' show ApiServices, listParser;
 export 'src/config/api_config.dart' show ApiConfig;
 export 'src/config/auth_config.dart' show AuthConfig;
+export 'src/config/refresh_outcome.dart' show RefreshOutcome;
 export 'src/config/retry_policy.dart' show RetryPolicy;
 export 'src/observer/api_observer.dart' show ApiObserver;
 export 'src/utils/api_log_options.dart' show ApiLogOptions;

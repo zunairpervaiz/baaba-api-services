@@ -24,6 +24,18 @@ import 'package:baaba_api_handler/src/utils/constants.dart';
 /// The last is FastAPI/Pydantic's default `422` shape: a list of objects,
 /// each read the same way.
 ///
+/// When none of those keys has anything, the field messages under `errors`
+/// are used, then `title`. That covers ASP.NET's automatic `400`, which has
+/// neither `message` nor `detail`:
+///
+/// ```json
+/// {"title": "One or more validation errors occurred.",
+///  "errors": {"Email": ["The Email field is required."]}}
+/// ```
+///
+/// yields `'The Email field is required.'` — what to fix, rather than only
+/// that something is wrong.
+///
 /// A JSON body that arrives as a `String` — `responseType: plain`, or a
 /// server labelling JSON as `text/plain` — is decoded and read as JSON rather
 /// than shown to the user as raw `{"message": ...}` text.
@@ -85,7 +97,75 @@ String extractErrorMessage(dynamic data, {int depth = 0}) {
     return value.toString();
   }
 
+  final fieldErrors = _flattenErrors(data[errorsKey], depth);
+  if (fieldErrors.isNotEmpty) return fieldErrors;
+
+  final title = data[titleKey];
+  if (title is String && title.trim().isNotEmpty) return title.trim();
+
   return '';
+}
+
+/// Joins the messages in an `errors` value — a `{field: [messages]}` map, or
+/// a plain list — into one line, in the order the server gave them.
+String _flattenErrors(Object? errors, int depth) {
+  final Iterable<Object?> entries;
+  if (errors is Map) {
+    entries = errors.values;
+  } else if (errors is List) {
+    entries = errors;
+  } else {
+    return '';
+  }
+
+  final parts = <String>[];
+  void add(Object? item) {
+    if (item is String) {
+      parts.add(item.trim());
+    } else if (item is Map) {
+      parts.add(extractErrorMessage(item, depth: depth + 1));
+    }
+  }
+
+  for (final entry in entries) {
+    if (entry is List) {
+      entry.forEach(add);
+    } else {
+      add(entry);
+    }
+  }
+  return parts.where((s) => s.isNotEmpty).join(' ');
+}
+
+/// Pulls a machine-readable error code out of a body — `code` or
+/// `errorCode`, at the top level or inside an `error` object:
+///
+/// ```json
+/// {"success": false, "code": "ACCOUNT_LOCKED", "message": "..."}
+/// {"error": {"code": "INSUFFICIENT_FUNDS", "message": "..."}}
+/// ```
+///
+/// A numeric code is returned as its string. `null` when there is none.
+String? extractErrorCode(dynamic data) {
+  if (data is String) {
+    final text = data.trim();
+    if (!text.startsWith('{')) return null;
+    try {
+      data = jsonDecode(text);
+    } on FormatException {
+      return null;
+    }
+  }
+  if (data is! Map) return null;
+
+  for (final key in const [codeKey, errorCodeKey]) {
+    final value = data[key];
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+    if (value is num) return value.toString();
+  }
+
+  final nested = data[errorKey];
+  return nested is Map ? extractErrorCode(nested) : null;
 }
 
 /// Pulls per-field validation errors out of a body, for driving form field

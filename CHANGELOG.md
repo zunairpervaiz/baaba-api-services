@@ -1,5 +1,7 @@
 ## 4.0.0
 
+The first release on pub.dev since 2.0.0: 3.0.0 and 3.1.0 were never published. Upgrading from 2.0.0 means reading the 3.0.0, 3.1.0 and 4.0.0 sections below, and following the 3.0.0 and 4.0.0 steps in `MIGRATION.md`.
+
 See `MIGRATION.md` for upgrade steps.
 
 ### ⚠️ Breaking changes
@@ -10,9 +12,20 @@ See `MIGRATION.md` for upgrade steps.
 * **`isSuccess` is no longer applied to `head()`.** A `HEAD` response has no body, so a predicate reading it — the common `r.data['success'] == true` — threw on every call, and a throw counts as a rejection. `download()` already skipped it.
 * **`ErrorSource.cacheError` and `ResponseCode.cacheError` are removed.** Exhaustive switches naming them stop compiling. The code `-5` is retired, not reused: `mapStatusCodeToEnum(-5)` now returns `defaultError`.
 * The unexported `src/utils/response_messages.dart` shim is deleted.
+* **`AuthConfig.onTokenRefresh` is no longer required, and its field is nullable**, since `refreshSession` (below) is the alternative to it. Passing it works exactly as before; only code that *reads* `config.auth!.onTokenRefresh` needs a null check.
+
+### Added
+
+* **`AuthConfig.skipRefresh`.** Requests whose `401` must not trigger a refresh. A wrong password on the login screen used to start a refresh with nothing to refresh, which failed and fired `onRefreshFailed` — logging the user "out" of the login screen. Logout belongs here too. Matched requests still carry the token.
+* **`AuthConfig.refreshSession` and `RefreshOutcome`.** An alternative to `onTokenRefresh` that says *why* a refresh failed. `sessionExpired` fires `onRefreshFailed`; `failed` — offline, a timeout, a `5xx` — does not, so losing signal mid-refresh no longer signs the user out. A throw counts as `failed`.
+* **`AuthConfig.isTokenExpired`.** Refreshes before sending a request whose token has run out, instead of spending a round trip on a `401`. Concurrent requests share one refresh. When the refresh ends the session the request is not sent and fails as a `401`; when it merely fails, the request goes out with the token it has, and its `401` does not refresh a second time.
+* **`ApiConfig.mapFailure`.** Rewrites any `Failure` before the caller sees it — HTTP errors, timeouts, offline, cancellation, parse errors and rejected bodies — so app-specific messages and failure kinds live in one place. `FakeApiServices` applies it too.
+* **`Failure.errorCode`.** The server's own error code, read from `code` or `errorCode` at the top level or inside an `error` object.
 
 ### Fixed
 
+* **`download()` sent `Accept: application/json`**, which servers that honour it — static file handlers in particular — answer with `406`. Downloads, and requests for `ResponseType.bytes` or `stream`, now send `Accept: */*` unless the caller passes its own headers.
+* **ASP.NET validation errors showed the generic message.** Its automatic `400` body, `{"title": ..., "errors": {...}}`, has neither `message` nor `detail`. When none of the usual keys has anything, the field messages under `errors` are now used, then `title`.
 * **A refresh token that had expired froze the app for `refreshTimeout` (30s) before signing out.** When `onTokenRefresh` refreshed through the same client and the refresh endpoint answered `401`, that `401` waited on the very refresh it belonged to until the timeout, loader showing. It now fails at once and `onRefreshFailed` fires immediately.
 * **A `GET` made inside `onTokenRefresh` could deadlock under `maxConcurrentRequests`.** De-duplication collapsed it onto an identical request queued behind the one awaiting the refresh, skipping the refresh's bypass of the concurrency cap. Requests made during a refresh are no longer de-duplicated.
 * **`ApiServices.reset()` left a showing loader on screen for good.** The in-flight request's hide was correctly ignored as stale, but nothing else closed the dialog. `reset()` now calls `onHide` when a loader is showing.
@@ -37,6 +50,8 @@ See `MIGRATION.md` for upgrade steps.
 * In-flight de-duplication of identical `GET`, `HEAD` and `OPTIONS` requests works as before.
 
 ## 3.1.0
+
+Not published to pub.dev; included in 4.0.0.
 
 ### Fixed
 
@@ -71,6 +86,8 @@ See `MIGRATION.md` for upgrade steps.
 * **`FakeApiServices` now builds failures the way the real client does.** `stubFailure` maps the status (`401` → `ErrorSource.unauthorized`) and reads the body's message, where it always produced `badRequest` with the generic text. `stubJson` with a non-`2xx` status is a failure, as Dio makes it. `ApiConfig.isSuccess` applies to stubbed responses. A consumer test that asserted the old, unrealistic values will need updating — it was passing against behaviour production does not have.
 
 ## 3.0.0
+
+Not published to pub.dev; included in 4.0.0.
 
 See `MIGRATION.md` for upgrade steps. Most apps need only the first item.
 

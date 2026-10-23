@@ -86,6 +86,18 @@ class Failure extends Equatable implements Exception {
   Map<String, List<String>>? get validationErrors =>
       extractValidationErrors(data);
 
+  /// The server's own error code from [data] — `code` or `errorCode`, at the
+  /// top level or inside an `error` object — for branching on a business
+  /// failure that shares its HTTP status with others:
+  ///
+  /// ```dart
+  /// if (failure.errorCode == 'ACCOUNT_LOCKED') showLockedDialog();
+  /// ```
+  ///
+  /// `null` when the body carries none. See also `ApiConfig.mapFailure`, to
+  /// do this once for the whole app.
+  String? get errorCode => extractErrorCode(data);
+
   @override
   String toString() =>
       '{errorType: $errorType, code: ${code.value}, statusCode: $statusCode, '
