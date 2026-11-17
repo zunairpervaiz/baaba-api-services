@@ -1,0 +1,27 @@
+name: baaba_api_generator
+description: "build_runner generator for baaba_api_handler: typed, obfuscated API endpoints and environment values from .env files."
+version: 1.0.0
+repository: https://github.com/zunairpervaiz/baaba-api-services/tree/master/packages/baaba_api_generator
+issue_tracker: https://github.com/zunairpervaiz/baaba-api-services/issues
+
+topics:
+  - codegen
+  - build-runner
+  - env
+  - obfuscation
+
+environment:
+  # source_gen 4 / analyzer 14. Only your build needs this SDK; the generated
+  # code runs on whatever baaba_api_handler supports.
+  sdk: ^3.11.0
+
+dependencies:
+  analyzer: ">=14.0.0 <15.0.0"
+  baaba_api_handler: ^5.0.0
+  build: ^4.0.0
+  source_gen: ^4.3.0
+
+dev_dependencies:
+  build_test: ^3.5.0
+  lints: ^6.0.0
+  test: ^1.25.0

@@ -19,8 +19,10 @@ build/
 # Coverage
 coverage/
 
-# Generated files
+# Generated files. The example's are committed, so it builds and analyzes
+# straight after a clone; they change on every build (fresh random keys).
 *.g.dart
+!packages/baaba_api_handler/example/lib/**/*.g.dart
 *.freezed.dart
 
 # Pub cache

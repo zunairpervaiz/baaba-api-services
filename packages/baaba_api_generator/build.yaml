@@ -1,0 +1,8 @@
+builders:
+  baaba_api:
+    import: "package:baaba_api_generator/builder.dart"
+    builder_factories: ["baabaApiBuilder"]
+    build_extensions: {".dart": [".baaba_api.g.part"]}
+    auto_apply: dependents
+    build_to: cache
+    applies_builders: ["source_gen:combining_builder"]

@@ -1,0 +1,35 @@
+name: baaba_api_handler
+description: "A typed, functional HTTP client for Flutter. Wraps Dio with Either-based error handling, token refresh, retries, request de-duplication, and a built-in test double."
+version: 5.0.0
+repository: https://github.com/zunairpervaiz/baaba-api-services/tree/master/packages/baaba_api_handler
+issue_tracker: https://github.com/zunairpervaiz/baaba-api-services/issues
+
+topics:
+  - http
+  - networking
+  - dio
+  - rest
+  - api
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.11.1
+  pretty_dio_logger: ^1.4.0
+  internet_connection_checker_plus: ^3.1.2
+  fpdart: ^1.2.0
+  equatable: ^3.0.0
+  meta: ^1.15.0
+  # For pinnedIoClient in io.dart. Already a transitive dependency through
+  # internet_connection_checker_plus, so naming it costs nothing.
+  http: ^1.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  mocktail: ^1.0.5

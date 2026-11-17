@@ -1,0 +1,5 @@
+# Develop against the handler in this repository rather than the published
+# one. Not part of the published package's resolution.
+dependency_overrides:
+  baaba_api_handler:
+    path: ../baaba_api_handler

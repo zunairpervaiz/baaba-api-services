@@ -1,0 +1,11 @@
+# build_runner only reads the files listed here. The defaults do not include
+# env/, so without this the generator reports that it cannot read the .env
+# files. Listing sources replaces the defaults, so lib/** and the rest stay.
+targets:
+  $default:
+    sources:
+      - $package$
+      - lib/**
+      - env/**
+      - test/**
+      - pubspec.yaml

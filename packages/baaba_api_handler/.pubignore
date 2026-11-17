@@ -1,0 +1,43 @@
+# Files excluded from the published package.
+#
+# A .pubignore replaces .gitignore entirely for publishing, so everything that
+# should stay out of the archive has to be listed here — not just the extras.
+
+# Dart / Flutter build artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock
+
+# Build outputs
+build/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+
+# Coverage
+coverage/
+
+# Generated files (the example's are kept: it uses baaba_api_generator, and
+# its obfuscated output is part of what it shows)
+*.g.dart
+!example/lib/**/*.g.dart
+*.freezed.dart
+
+# Pub cache
+.pub-cache/
+.pub/
+
+# Repo tooling that consumers do not need
+CLAUDE.md
+
+# Throwaway TLS key for the pinning tests. Harmless, but a private key does
+# not belong in a published archive (pub flags it); those tests need a
+# repository checkout.
+test/fixtures/tls/server.key

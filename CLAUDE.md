@@ -2,7 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Layout
+
+```
+packages/baaba_api_handler/     the published client (+ example/)
+packages/baaba_api_generator/   the published build_runner generator
+```
+
+Sibling packages, **not** a pub workspace and **not** nested (see "Code generation" for why). Unless a path says otherwise, paths in this file are relative to `packages/baaba_api_handler/`.
+
 ## Commands
+
+Run from `packages/baaba_api_handler/`:
 
 ```bash
 # Run all tests
@@ -20,7 +31,15 @@ dart format lib/ test/ example/
 
 # Get dependencies
 flutter pub get
+
+# The generator package (separate resolution — see "Code generation")
+cd ../baaba_api_generator && flutter pub get && dart test && dart analyze
+
+# The example: regenerate its parts after touching the generator or example/env/
+cd example && dart run build_runner build && flutter test
 ```
+
+Three packages, each with its own `pubspec.yaml` and lockfile: the handler, the generator, and the handler's `example/`. Run commands from the package's own directory.
 
 ## Architecture
 
@@ -28,11 +47,11 @@ flutter pub get
 
 ### Public surface
 
-Two identical entrypoints: `lib/baaba_api_handler.dart` (conventional) and `lib/ts_api_handler.dart` (predates the rename, still the canonical file). A third, `lib/testing.dart`, ships `FakeApiServices` for consumers' tests and is never imported by production code.
+Two identical entrypoints: `lib/baaba_api_handler.dart` (conventional) and `lib/ts_api_handler.dart` (predates the rename, still the canonical file). A third, `lib/testing.dart`, ships `FakeApiServices` for consumers' tests and is never imported by production code. `lib/annotations.dart` exports `@BaabaApiEndpoint`/`@BaabaApiEnvironment`/`@BaabaApiField`, `ApiEndpoint` and the `@internal` `decodeObfuscated`; it must stay **Flutter-free**, because `baaba_api_generator` imports it and builders run on the plain Dart VM. The main library re-exports it. A fourth, `lib/io.dart`, ships `pinnedHttpClient`/`pinnedIoClient` and imports `dart:io` — it is the **only** public library allowed to; the core must stay web-safe (see Transport).
 
-Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `RetryPolicy`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`/`HttpMethodExtension`, `listParser`, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions`/`ResponseType` (Dio).
+Exports: `ApiServices`, `ApiConfig`, `AuthConfig`, `RetryPolicy`, `PinningConfig`/`UnlistedHostPolicy`, `ProxyConfig`, `ApiEndpoint`, `ApiObserver`, `ApiLogOptions`, `Base64LogTrimmer`, `UploadFile`, `Failure`, `ErrorSource`, `ResponseCode`, `HttpMethod`/`HttpMethodExtension`, `listParser`, `ApiException`/`ApiResultOrThrow`/`EitherOrThrow`/`guardApi`, `jwtExpired`/`jwtExpiryCheck`, plus pass-throughs `Either`/`Left`/`Right` (fpdart), `Response`/`CancelToken`/`FormData`/`MultipartFile`/`RequestOptions`/`ResponseType` (Dio).
 
-Current version: **4.0.0**. Latest on pub.dev is **2.0.0** — 3.0.0 and 3.1.0 were never published, so 4.0.0 is the next release there and its CHANGELOG/MIGRATION entries must stay readable for someone jumping straight from 2.0.0. Until 4.0.0 is published, new changes go into the 4.0.0 section rather than a new version. SDK floor: Dart 3.8 / Flutter 3.32 — the oldest the dev tooling (`flutter_lints` 6) can actually build, so the constraint never claims more than is tested.
+Current version: **5.0.0** (unreleased). Latest on pub.dev is **4.0.0** (commit `acaa4f1`; 3.0.0 and 3.1.0 were never published). The 4.0.0 CHANGELOG/MIGRATION sections describe what shipped and must not change; until 5.0.0 is published, new changes go into the 5.0.0 section. 5.0.0 is major only because of `certificateRejected`. `baaba_api_generator` 1.0.0 (unreleased) requires `baaba_api_handler: ^5.0.0`, so the handler publishes first. SDK floor: Dart 3.8 / Flutter 3.32 — the oldest the dev tooling (`flutter_lints` 6) can actually build, so the constraint never claims more than is tested.
 
 Response caching (`CachePolicy`, `ApiCacheHelper`, the `api_cache_manager`/SQLite dependency) was removed in 4.0.0. Don't reintroduce a persistence dependency without discussing it — the package deliberately persists nothing.
 
@@ -40,13 +59,15 @@ Response caching (`CachePolicy`, `ApiCacheHelper`, the `api_cache_manager`/SQLit
 
 Everything lives on one `ApiConfig` object passed to `ApiServices.init(...)`. This replaced four separate static mutables in 2.0.0 — with nine features to configure, a setter per feature meant a dozen statics with load-order footguns.
 
-`ApiServices` holds `_config` (the whole `ApiConfig`), `_instance`, and the two loader callbacks as statics. The 1.x setters (`configure()`, `setConnectivityCheck()`, `setLogging()`) were deprecated in 2.0.0 and removed in 3.0.0; `init()` is the only way to configure.
+**Named clients.** `ApiServices` keeps per-name registries as statics: `_instances` and `_configs` (keyed by name, `ApiServices.defaultClient` = `'default'` for the unnamed one), `_sharedLoader`, and `_ownLoaders`. `init(config, {name})` builds one; `instance()` is the default (built lazily, as always); `named(name)` throws `StateError` for a name never `init`ed — a named client is deliberately never built on demand. Each `ApiServicesImplementation` carries its `_name` and reads **its own** config through the `_config` getter (`ApiServices.configOf(_name)`). Never read another client's config, and never add a bare static read of configuration — every request-time setting must go through `_config`. The gate is built from the named config at construction. The 1.x setters (`configure()`, `setConnectivityCheck()`, `setLogging()`) were deprecated in 2.0.0 and removed in 3.0.0; `init()` is the only way to configure.
 
-**Which settings apply when.** Anything read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `observer` — takes effect immediately because the implementation reads `ApiServices._config` per call. Anything baked into the Dio client or the `NetworkInfo` — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `httpClientAdapter`, `connectivityProbe`, `connectivityCacheTtl` — applies only to the client built by that `init()` call.
+**Which settings apply when.** Anything read at request time — `bypassConnectivityCheck`, `isSuccess`, `onRejected`, `mapFailure`, `observer` — takes effect immediately because the implementation reads `_configs[name]` per call (so even a caller holding a stale instance from before the last `init` of that name sees it). Anything baked into the Dio client or the `NetworkInfo` — `baseUrl`, timeouts, `logging`, `retry`, `auth`, `httpClientAdapter`, `pinning`, `proxy`, `connectivityProbe`, `connectivityCacheTtl`, `maxConcurrentRequests` — applies only to the client built by that `init()` call.
+
+**URL joining.** `DioFactory` stores `normalizeBaseUrl(baseUrl)` (trailing slashes trimmed) and the service layer passes `resolveEndpointPath(config.baseUrl, endpoint)` to Dio (`src/utils/url_join.dart`), which only prefixes a missing leading slash. Dio concatenates and only collapses `//` when the url has a single `:/`, so without this `https://x/v1` + `users` became `/v1users`. Never strip a caller's leading slash: `skipRefresh` and observers match on `options.path` as written. `ApiEndpoint` (`src/endpoint/`) is an extension type over `String` — keep it zero-cost and never make a method require it.
 
 A throwing `isSuccess` counts as a rejection (fails closed, via `_accepts`). It is not applied to `head()` or `download()` — neither has a body to judge, so a body-reading predicate would reject every call; `FakeApiServices` skips them too (`evaluate: false`). `isSuccess` rejections route through `onRejected` first, which may return a `Failure` of its own; `null` or a throwing builder falls back to the generic `badRequest`.
 
-`ApiServices.reset()` clears the singleton, config, and loader callbacks, and cancels the old client's in-flight requests — otherwise one finishing after a logout still carries the previous user's token and reports to their observer. `init()` deliberately does not cancel. Tests should call it in `tearDown`.
+`ApiServices.reset({name})` clears that client (or, with no name, every client), its config, and its loader, and cancels the old client's in-flight requests — otherwise one finishing after a logout still carries the previous user's token and reports to their observer. `init()` deliberately does not cancel. Tests should call it in `tearDown`.
 
 ### Request lifecycle
 
@@ -86,9 +107,9 @@ The three-layer split in `api_service.dart` matters: the loader must be referenc
 
 Message extraction lives in `src/utils/error_body.dart` (`extractErrorMessage`), shared by `ErrorHandler` and the `isSuccess` path so both surface the same message for the same body. It tries `message`, `detail`, then `error`, follows one level into a nested object, and joins a list.
 
-`ResponseCode` internal codes: `connectTimeout(-1)`, `cancel(-2)`, `receiveTimeout(-3)`, `sendTimeout(-4)`, `noInternetConnection(-6)`, `defaultError(-7)`, `connectionFailure(-8)`, `parseError(-9)`. `-5` was `cacheError` (removed in 4.0.0) and is retired, never reused.
+`ResponseCode` internal codes: `connectTimeout(-1)`, `cancel(-2)`, `receiveTimeout(-3)`, `sendTimeout(-4)`, `noInternetConnection(-6)`, `defaultError(-7)`, `connectionFailure(-8)`, `parseError(-9)`, `certificateRejected(-10)`. `-5` was `cacheError` (removed in 4.0.0) and is retired, never reused.
 
-> Adding a variant to `ErrorSource` or `ResponseCode` is a **breaking change** — consumers switching exhaustively stop compiling. `parseError` is why 2.0.0 is a major.
+> Adding a variant to `ErrorSource` or `ResponseCode` is a **breaking change** — consumers switching exhaustively stop compiling. `parseError` is why 2.0.0 is a major; `gatewayTimeout` shipped in 4.0.0; `certificateRejected` is why 5.0.0 is a major.
 
 ### Connectivity check
 
@@ -171,7 +192,7 @@ A `tag` opts the request out of de-duplication for the same reason a caller-supp
 
 ### Loading indicator
 
-`ApiServices.configureLoader({onShow, onHide})`. Reference-counted via `ApiServices._activeLoadingCount` so concurrent requests share one indicator. The counter is **static**, matching the scope of the callbacks it drives — the indicator is one global widget, and a second `init()` while requests are in flight would otherwise start a fresh per-instance count against a dialog the previous client is still driving. `reset()` clears it and bumps `_loaderEpoch`; `_showLoader` returns the epoch and `_hideLoader(epoch)` ignores a stale one, or a request in flight across a `reset()` would drive the count negative and the loader would never show again. `_sendRequest` wraps its whole body in try/finally, so the loader hides on success, `Failure`, and thrown exceptions alike. `upload()` holds the loader across file reads *and* the request, passing `showLoader: false` down to `_sendRequest` to avoid double-counting.
+`ApiServices.configureLoader({onShow, onHide, name})`. Accounting lives on a private `_Loader` (callbacks, `_count`, `_epoch`), **not** on the client: the indicator is a widget, and a second `init()` while requests are in flight would otherwise start a fresh per-instance count against a dialog the previous client is still driving. Without a name it configures `_sharedLoader`, used by every client that has no loader of its own — so a request on each of two clients opens the dialog once. `configureLoader(name:)` gives that client its own `_Loader`. `_showLoader` returns a hold `(loader, epoch)` and `_hideLoader` releases on *that* loader, so a loader reassigned mid-request is still released correctly. `_Loader.discard()` (called by `reset`) hides a showing indicator, zeroes the count and bumps the epoch; a stale hold is ignored, or a request in flight across a `reset()` would drive the count negative and the loader would never show again. `reset(name: x)` discards only `x`'s own loader; the shared one goes with `reset()` or `reset(name: defaultClient)`. `_sendRequest` wraps its whole body in try/finally, so the loader hides on success, `Failure`, and thrown exceptions alike. `upload()` holds the loader across file reads *and* the request, passing `showLoader: false` down to `_sendRequest` to avoid double-counting.
 
 ### Uploads
 
@@ -189,9 +210,46 @@ A `tag` opts the request out of de-duplication for the same reason a caller-supp
 
 > `Base64LogTrimmer` filters **lines, not fields** — the logger has already flattened the body by the time it is called, so the test is a shape test: a run of the base64 alphabet at least `minRunLength` long. Continuation lines are swallowed and counted; the first line of a blob keeps its key plus `keptChars` of value. This is why it is coupled to PrettyDioLogger's box-drawing gutter (`_gutter` strips `║╟╔╚╝═`) — **replacing the logging library breaks it silently**, with no error, just the base64 flooding back. Any logger swap must keep the same line framing or ship a matching trimmer.
 
+### Redaction
+
+`ApiLogOptions.redact` (default on) masks `Authorization` (always) plus `redactHeaders`, `redactQueryParams` (in `queryParameters` **and** a query written into the path) and `redactBodyFields` (JSON maps/lists at any depth, JSON strings, form-urlencoded strings, `FormData` fields; request and response bodies) and query secrets in `Response.redirects`. Only headers, query params and body fields named `*token*` keep a `redactKeepChars` prefix; other body fields are masked entirely. Implemented by `Redactor` (`src/utils/redactor.dart`), cached per `ApiLogOptions` instance via `Expando`, copy-on-write so an untouched body is returned as the same instance.
+
+It applies in **two** places and both must stay covered: the logger, via `RedactingLogInterceptor`, which hands PrettyDioLogger masked copies and throwaway handlers (whose futures are `ignore()`d — `ErrorInterceptorHandler.next` completes with an error nobody listens to), and the observer (`ObserverInterceptor`, `_notifyResponse`/`_notifyFailure`, and `FakeApiServices._observe*`). The masked `RequestOptions` copy **shares `extra`** with the original: PrettyDioLogger stamps its start time there on request and reads it off the response. Never redact the real request, response or the `Failure` the caller gets. Unlike `Base64LogTrimmer`, this does not depend on the logger's line format.
+
+### Transport: pinning and proxy
+
+`ApiConfig.pinning`/`proxy` are turned into an adapter by `createTransportAdapter` in `src/transport/transport.dart`, a **conditional export** (`transport_stub.dart` on web → `null`, `transport_io.dart` when `dart.library.io`). Nothing else in the core may import `dart:io` or `package:dio/io.dart`; `isTlsError` lives there too so `ErrorHandler` can recognise a `TlsException` without importing `dart:io`.
+
+`PinnedRoutingAdapter` follows redirects itself (each hop with `followRedirects: false`, GET/HEAD only, `Authorization`/`Cookie` dropped across origins), so every hop goes through `rootsFor` and the unlisted-host policy — left to `HttpClient`, a redirect would be followed inside the first hop's `SecurityContext`. Plain `http` to a pinned host is refused. It keeps one `IOHttpClientAdapter` per distinct root set (built lazily, so a bad PEM throws inside `fetch` and fails closed) plus one on the system store. **No `badCertificateCallback`, ever** — pinning relies on `SecurityContext(withTrustedRoots: false)` failing the handshake. A `TlsException` (or a `DioException` wrapping one) is rethrown as `DioExceptionType.badCertificate` → `ErrorSource.certificateRejected` (`-10`). The proxy is `HttpClient.findProxy` on every client the adapter builds, so `https` is tunnelled with `CONNECT` and still verified against the pinned context. `httpClientAdapter` and `pinning`/`proxy` are mutually exclusive (assert).
+
+### Per-call retry and extras
+
+Every request method takes `bool? retryable` and `Map<String, dynamic>? extra`, carried on `_Call` and merged by `_extraFor` into a **copy** for `Options.extra`, the flag under `RetryPolicy.retryableKey`. `NetworkRetryInterceptor._isRetryableFailure` checks it first: `false` vetoes everything (even `429`/`503`); `true` stands in for idempotency, leaving the status list, `maxRetries` and `retryIf` in charge. Both are part of the de-duplication key.
+
+### Code generation (`packages/baaba_api_generator/`)
+
+**Not a pub workspace, deliberately.** A workspace forces one resolution across all members, and Flutter's pinned `test_api`/`vm_service` (via `flutter_test`) conflict with the `build_test` versions that support analyzer 14. So the generator resolves on its own: its pubspec asks for `baaba_api_handler: ^5.0.0`, and the committed `pubspec_overrides.yaml` points that at `../baaba_api_handler` for development (publish shows a hint about it; expected). The example, which uses both, needs `dependency_overrides` for the handler for the same reason. The generator's SDK floor is 3.11 (source_gen 4) — it only constrains the build, not the handler.
+
+**Not nested either.** Pub reads `.pubignore` by path from the git root, identically for every package, so with the generator inside the handler's directory no rule could both keep it out of the handler's archive and let it publish itself. Hence the sibling `packages/` layout.
+
+`SharedPartBuilder` with two `GeneratorForAnnotation`s (`EndpointsGenerator`, `EnvironmentGenerator`, `lib/src/generators.dart`), combined into `*.g.dart` by source_gen. Both work on a **typedef** (`typedef Endpoints = _Endpoints;` — every key; static access through a class alias is legal Dart) or a **class** with static fields (the envied shape — only declared non-`const` fields; a missing key is an error; an untyped field is an error, since its type would be inferred from the part being generated). `abstract final class X = _X;` is not valid Dart for statics, which is why the typedef form exists.
+
+Invariants:
+
+- **The plain value is never written when obfuscating** — not in code, not in a comment, not via a literal like `'true'`, and not via its length: a bool is stored as `'1'`/`'0'` and compared by code unit, an int signed and zero-padded to 20 characters. `generator_test.dart` scans the output for values, fragments and any quote character.
+- Keys come from `Random.secure`, one per code unit, with the low 16 bits never `0` (a zero there would leave that unit in clear — the high bits are random but don't touch it), and below 2^31 so web's 32-bit bitwise ops are safe. Values decode lazily through a `static final`.
+- Generated member names exclude reserved words and `Object`'s members (`hashCode`, `toString`, ...); placeholder names exclude `ApiEndpoint`/`Object`, which the method body refers to.
+- Named placeholders are rewritten to `{}` before storing, so `ApiEndpoint.fill` (positional only) fills them; the parameter list keeps the names.
+- Build errors are `InvalidGenerationSourceError`s carrying `path:line` and the key. The missing-file message must keep spelling out the `build.yaml` `sources` fix — that omission is the most common setup failure.
+- The generated header ignores `invalid_use_of_internal_member` (for `decodeObfuscated`) and `unused_element`/`unused_field` — the analyzer does not count uses that reach the private class through the public typedef, so every typedef member would otherwise warn.
+
+`decodeObfuscated` is `@internal`; each public library that re-exports it carries `// ignore: invalid_export_of_internal_element`. Generated code refers to handler names unqualified, so the annotated library must import the handler without a prefix.
+
+Generator tests use build_test (`test/support.dart` copies the handler's and `meta`'s sources from one `loadIsolateSources()`; with `build_to: cache` the part lands under `.dart_tool/build/generated/`). Goldens mask the random lists. The end-to-end proof is the example: `example/test/endpoints_test.dart` runs the real generated code. Its `*.g.dart` are committed (un-ignored in `.gitignore` and `.pubignore`), so they churn on every rebuild.
+
 ### Testing notes
 
 - `mocktail` for all mocks. Mocks created in `setUpAll` are shared across a group; `reset(mock)` in `setUp` if you need `verifyNever`.
-- Two established patterns: **`MockDio` + `MockNetworkInfo`** for service-level tests, and a **fake `HttpClientAdapter`** for interceptor-level tests that drive real Dio end-to-end. Don't invent a third.
+- Two established patterns: **`MockDio` + `MockNetworkInfo`** for service-level tests, and a **fake `HttpClientAdapter`** for interceptor-level tests that drive real Dio end-to-end. Don't invent a third — with one scoped exception: pinning and proxying can only be proven by a real handshake, so `pinning_test.dart` and `proxy_test.dart` run a local HTTPS server and a `CONNECT` proxy (`test/support/`) against the throwaway CA in `test/fixtures/tls/`. Keep real sockets confined to transport tests.
 - `ApiServices.reset()` in `tearDown` for anything touching static config.
 - Network-level tests mock `Dio` directly; don't mock `ApiServices` itself — use `FakeApiServices` from `lib/testing.dart`. The fake must *behave* like production, not just compile against it: it builds failures with `failureForStatus` (`error_handler.dart`) and applies `isSuccess` with `evaluateSuccess` (`success_check.dart`) — the same functions the real client uses. It also reports to `ApiConfig.observer` with production's rules: `onRequest` unless offline or pre-cancelled, then one outcome per call, both for a parse failure. Add to those rather than re-implementing logic in the fake. Anything added to the `ApiServices` interface has to land in `FakeApiServices` too, or consumers' test suites stop compiling.
