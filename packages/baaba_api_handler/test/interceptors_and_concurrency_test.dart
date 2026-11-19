@@ -360,6 +360,35 @@ void main() {
       );
     });
 
+    test('one shared token cancels every request it queued', () async {
+      final adapter = _Adapter(manual: true);
+      init(adapter, config: const ApiConfig(maxConcurrentRequests: 1));
+      final api = ApiServices.instance();
+      final shared = CancelToken();
+
+      // /first is admitted on the shared token and finishes; the gate keeps
+      // listening to the token for the ones queued after it.
+      final first = api.get(endpoint: '/first', cancelToken: shared);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      adapter.releaseOne();
+      expect((await first).isRight(), isTrue);
+
+      final running = api.get(endpoint: '/running');
+      final a = api.get(endpoint: '/a', cancelToken: shared);
+      final b = api.get(endpoint: '/b', cancelToken: shared);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      shared.cancel();
+
+      for (final queued in [a, b]) {
+        final result = await queued.timeout(const Duration(seconds: 1));
+        expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+      }
+      adapter.releaseOne();
+      expect((await running).isRight(), isTrue);
+      expect(adapter.requests.map((r) => r.path), ['/first', '/running']);
+    });
+
     test(
       'a queued request cancels at once, not when a slot frees up',
       () async {

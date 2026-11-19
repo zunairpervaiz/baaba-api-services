@@ -219,6 +219,31 @@ void main() {
       expect(redactor.body('a = b'), 'a = b');
     });
 
+    test('masks a hand-built form body that is not strictly encoded', () {
+      // An unencoded space, a bare flag and a trailing `&` once made the
+      // whole body fail the shape test and print the password in clear.
+      expect(
+        redactor.body('username=ada&password=correct horse'),
+        'username=ada&password=…[redacted]',
+      );
+      expect(
+        redactor.body('remember&password=hunter2&'),
+        'remember&password=…[redacted]&',
+      );
+    });
+
+    test('masks only the value in text that is not a form body', () {
+      // An HTML error page: masking to the next `&` would eat the page.
+      const page =
+          '<p>Expired.</p>\n<a href="/reset?a=1&password=hunter2">Reset</a>'
+          '\n<p>Contact support.</p>';
+      expect(
+        redactor.body(page),
+        '<p>Expired.</p>\n<a href="/reset?a=1&password=…[redacted]">Reset</a>'
+        '\n<p>Contact support.</p>',
+      );
+    });
+
     test('a password keeps no prefix; a token keeps redactKeepChars', () {
       expect(redactor.body({'password': 'hunter2-correct'}), {
         'password': '…[redacted]',

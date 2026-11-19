@@ -19,6 +19,12 @@ class Emitter {
   Emitter({required this.obfuscate, Random? random})
     : _random = random ?? Random.secure();
 
+  /// Whether [name] has the shape of a storage member (`_v0`, `_v1`, ...),
+  /// which a class-form field of the same name would collide with.
+  static bool isStorageName(String name) => _storageName.hasMatch(name);
+
+  static final RegExp _storageName = RegExp(r'^_v\d+$');
+
   /// The storage declarations written so far.
   String get storage => _storage.toString();
 

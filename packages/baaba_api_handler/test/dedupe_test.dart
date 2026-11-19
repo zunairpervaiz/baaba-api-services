@@ -353,5 +353,27 @@ void main() {
         api.get(endpoint: '/report', onReceiveProgress: (_, _) {}),
       ]);
     });
+
+    test(
+      'a caller with its own receive timeout gets its own request',
+      () async {
+        // Collapsed, the follower relying on the default would inherit the
+        // originator's short deadline and fail with its timeout.
+        await expectSeparate([
+          api.get(endpoint: '/feed'),
+          api.get(
+            endpoint: '/feed',
+            receiveTimeout: const Duration(seconds: 2),
+          ),
+        ]);
+      },
+    );
+
+    test('a caller with its own send timeout gets its own request', () async {
+      await expectSeparate([
+        api.get(endpoint: '/feed', sendTimeout: const Duration(seconds: 2)),
+        api.get(endpoint: '/feed'),
+      ]);
+    });
   });
 }

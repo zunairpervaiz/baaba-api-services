@@ -1,36 +1,48 @@
+import 'package:baaba_api_handler/src/utils/binary_log_summary.dart';
 import 'package:baaba_api_handler/src/utils/redactor.dart';
 import 'package:dio/dio.dart';
 
-/// Puts a [Redactor] in front of a logging interceptor.
+/// Hands the logging interceptor a copy fit to print: binary bodies
+/// summarized ([BinaryLogSummary]) and, unless redaction is off, secrets
+/// masked by a [Redactor].
 ///
-/// The logger is handed masked *copies* and a handler that goes nowhere; the
+/// The logger is handed these *copies* and a handler that goes nowhere; the
 /// real request, response and error continue down the chain untouched. That
-/// way the logger needs no knowledge of redaction, and swapping the logging
-/// library keeps it — unlike line-filtering in `logPrint`, which would be
+/// way the logger needs no knowledge of either, and swapping the logging
+/// library keeps both — unlike line-filtering in `logPrint`, which would be
 /// tied to one logger's output format.
 class RedactingLogInterceptor extends Interceptor {
   final Interceptor logger;
-  final Redactor redactor;
 
-  RedactingLogInterceptor({required this.logger, required this.redactor});
+  /// `null` when redaction is off; binary bodies are summarized regardless.
+  final Redactor? redactor;
+
+  RedactingLogInterceptor({required this.logger, this.redactor});
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    _quietly(() => logger.onRequest(redactor.request(options), _Discard()));
+    _quietly(() {
+      final copy = BinaryLogSummary.request(options);
+      logger.onRequest(redactor?.request(copy) ?? copy, _Discard());
+    });
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    _quietly(
-      () => logger.onResponse(redactor.response(response), _DiscardResponse()),
-    );
+    _quietly(() {
+      final copy = BinaryLogSummary.response(response);
+      logger.onResponse(redactor?.response(copy) ?? copy, _DiscardResponse());
+    });
     handler.next(response);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    _quietly(() => logger.onError(redactor.error(err), _DiscardError()));
+    _quietly(() {
+      final copy = BinaryLogSummary.error(err);
+      logger.onError(redactor?.error(copy) ?? copy, _DiscardError());
+    });
     handler.next(err);
   }
 

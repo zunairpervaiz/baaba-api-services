@@ -9,18 +9,16 @@ library;
 
 import 'dart:convert';
 
-/// Joins [baseUrl] and [endpoint], leaving an already-absolute [endpoint]
-/// alone so a call to a CDN or third-party host keys correctly.
-String _canonicalUrl(String? baseUrl, String endpoint) {
-  final isAbsolute =
-      endpoint.startsWith('http://') || endpoint.startsWith('https://');
-  if (isAbsolute || baseUrl == null || baseUrl.isEmpty) return endpoint;
+import 'package:baaba_api_handler/src/utils/url_join.dart';
 
-  final left = baseUrl.endsWith('/')
-      ? baseUrl.substring(0, baseUrl.length - 1)
-      : baseUrl;
-  final right = endpoint.startsWith('/') ? endpoint : '/$endpoint';
-  return '$left$right';
+/// The url Dio will request for [endpoint]: built with the same functions
+/// the service layer uses, so two endpoints Dio sends to different urls —
+/// `''` and `'/'`, `'?p=2'` and `'/?p=2'` — never share a key.
+String _canonicalUrl(String? baseUrl, String endpoint) {
+  if (isAbsoluteEndpoint(endpoint) || baseUrl == null || baseUrl.isEmpty) {
+    return endpoint;
+  }
+  return '${normalizeBaseUrl(baseUrl)}${resolveEndpointPath(baseUrl, endpoint)}';
 }
 
 /// Encodes [params] deterministically: keys sorted, values in the order given
@@ -110,9 +108,15 @@ String? buildRequestKey({
 /// Header names are case-insensitive, so they are lowercased before sorting.
 String _canonicalHeaders(Map<String, String>? headers) {
   if (headers == null || headers.isEmpty) return '';
-  final pairs = [
-    for (final MapEntry(:key, :value) in headers.entries)
-      '${key.toLowerCase()}:$value',
-  ]..sort();
-  return '|h:${pairs.join(',')}';
+  final pairs =
+      [
+        for (final MapEntry(:key, :value) in headers.entries)
+          [key.toLowerCase(), value],
+      ]..sort((a, b) {
+        final byName = a[0].compareTo(b[0]);
+        return byName != 0 ? byName : a[1].compareTo(b[1]);
+      });
+  // JSON-encoded so a value containing `,` or `:` — common in headers — can
+  // never be read as a boundary between two pairs.
+  return '|h:${jsonEncode(pairs)}';
 }

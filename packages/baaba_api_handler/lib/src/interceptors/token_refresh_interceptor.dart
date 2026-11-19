@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:baaba_api_handler/src/config/auth_config.dart';
 import 'package:baaba_api_handler/src/config/refresh_outcome.dart';
+import 'package:baaba_api_handler/src/utils/token_headers.dart';
 import 'package:baaba_api_handler/src/utils/constants.dart';
 import 'package:baaba_api_handler/src/utils/refresh_zone.dart';
 import 'package:baaba_api_handler/src/utils/replayable_request.dart';
@@ -141,6 +142,16 @@ class TokenRefreshInterceptor extends Interceptor {
     return headerBuilder?.call(token) ?? {authorization: 'Bearer $token'};
   }
 
+  /// Puts [token] on [options], recording which headers carry it so the
+  /// transport can drop them on a redirect to another origin.
+  void _attach(RequestOptions options, String token) {
+    final headers = _buildHeaders(token);
+    options.headers.addAll(headers);
+    options.extra[tokenHeadersKey] = [
+      for (final name in headers.keys) name.toLowerCase(),
+    ];
+  }
+
   /// Whether this request is one of ours, and so may carry the token.
   ///
   /// The client can reach any host — `ApiConfig.baseUrl` documents absolute
@@ -157,7 +168,35 @@ class TokenRefreshInterceptor extends Interceptor {
       // is ours.
       return false;
     }
+    return _isOurs(uri);
+  }
 
+  /// Whether the 401 in [err] came from one of our hosts.
+  ///
+  /// A redirect is followed inside one Dio call, so a request to our API can
+  /// be answered by whatever host it was redirected to — a CDN serving an
+  /// expired signed url, say, which never saw our token (it is dropped on a
+  /// cross-origin hop). Its 401 says nothing about our session.
+  bool _answeredByUs(DioException err) {
+    final redirects = err.response?.redirects;
+    if (redirects == null || redirects.isEmpty) return true;
+    // HttpClient records each Location as written, unresolved, and a
+    // relative one is relative to the hop before it — not to the request.
+    // Resolving only the last against the original url made a CDN's
+    // `302 /expired` look like our own host.
+    Uri answered;
+    try {
+      answered = err.requestOptions.uri;
+      for (final redirect in redirects) {
+        answered = answered.resolveUri(redirect.location);
+      }
+    } catch (_) {
+      return false;
+    }
+    return _isOurs(answered);
+  }
+
+  bool _isOurs(Uri uri) {
     final predicate = sendTokenTo;
     if (predicate != null) {
       try {
@@ -234,9 +273,7 @@ class TokenRefreshInterceptor extends Interceptor {
     // refresh. Recorded early, it is at worst replayed once.
     final generation = _generation;
     final token = await getToken();
-    if (token != null) {
-      options.headers.addAll(_buildHeaders(token));
-    }
+    if (token != null) _attach(options, token);
     // Remembered so a 401 can tell whether it is about the current token or
     // one that has been replaced since. Updated on every attempt, since a
     // retry or replay passes back through here. A hash, not the token: extra
@@ -252,8 +289,8 @@ class TokenRefreshInterceptor extends Interceptor {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
-    // A 401 from a host we never sent the token to says nothing about our
-    // token. Refreshing on it wastes a round trip, and a refresh that then
+    // A 401 from a host we never sent the token to — directly, or at the end
+    // of a redirect — says nothing about our token. Refreshing on it wastes a round trip, and a refresh that then
     // fails would fire onRefreshFailed — logging the user out because a
     // third-party CDN rejected a request.
     //
@@ -267,6 +304,7 @@ class TokenRefreshInterceptor extends Interceptor {
     if (err.response?.statusCode != 401 ||
         isInsideTokenRefresh ||
         !_shouldAttach(err.requestOptions) ||
+        !_answeredByUs(err) ||
         _isExempt(err.requestOptions) ||
         _isAlreadyRetried(err.requestOptions)) {
       return handler.next(err);
@@ -299,6 +337,12 @@ class TokenRefreshInterceptor extends Interceptor {
     if (sentWith != null && !_isRefreshing) {
       final current = await _currentToken();
       if (current != null && current.hashCode != sentWith) {
+        return _retryRequest(err, handler);
+      }
+      // A whole refresh can start and finish during that await, after
+      // getToken() had already read the old token. Without a second look at
+      // the generation this 401 would start a redundant refresh.
+      if (sentUnder is int && sentUnder != _generation && !_isRefreshing) {
         return _retryRequest(err, handler);
       }
     }
@@ -422,7 +466,12 @@ class TokenRefreshInterceptor extends Interceptor {
       // Marked, so a refresh request made through the same client is not
       // queued behind the requests waiting on it. See refresh_zone.dart.
       if (withOutcome != null) return await runAsTokenRefresh(withOutcome);
-      final refreshed = await runAsTokenRefresh(onTokenRefresh!);
+      // Neither callback: AuthConfig asserts against it, but asserts are gone
+      // in release. Without this the `!` threw, which reads as the session
+      // ending — every 401 fired onRefreshFailed and signed the user out.
+      final plain = onTokenRefresh;
+      if (plain == null) return RefreshOutcome.failed;
+      final refreshed = await runAsTokenRefresh(plain);
       return refreshed
           ? RefreshOutcome.refreshed
           : RefreshOutcome.sessionExpired;
@@ -454,9 +503,7 @@ class TokenRefreshInterceptor extends Interceptor {
     if (!canReplay(err.requestOptions)) return handler.next(err);
     try {
       final freshToken = await getToken();
-      if (freshToken != null) {
-        err.requestOptions.headers.addAll(_buildHeaders(freshToken));
-      }
+      if (freshToken != null) _attach(err.requestOptions, freshToken);
       err.requestOptions.extra['_tokenRetried'] = true;
 
       // An upload big enough to outlive its token has already had its

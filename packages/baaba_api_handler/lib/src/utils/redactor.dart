@@ -310,16 +310,32 @@ class Redactor {
     return node;
   }
 
-  // `a=1&b=2`: a form-urlencoded body, as an OAuth password grant sends.
-  static final RegExp _formEncoded = RegExp(
-    r'^[^\s=&]+=[^\s&]*(&[^\s=&]+=[^\s&]*)*$',
-  );
+  static final RegExp _notForm = RegExp('[\n\r"<>]');
+  static final RegExp _valueEnd = RegExp('[\\s"\'<>]');
 
   String _jsonString(String text) {
     final trimmed = text.trimLeft();
     if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-      if (!_formEncoded.hasMatch(text)) return text;
-      return _maskPairs(text, _fields, _maskField) ?? text;
+      // `a=1&b=2`: a form-urlencoded body, as an OAuth password grant sends.
+      // No shape test first: a hand-built body may carry an unencoded space
+      // (`password=correct horse`), a bare flag or a trailing `&`, and
+      // requiring a well-formed whole let those through unmasked. Prose is
+      // safe — only a pair whose key is a configured field changes.
+      //
+      // Text that cannot be a form body — markup, quotes, several lines: an
+      // HTML error page linking `...&token=abc">reset</a>` — would otherwise
+      // lose everything up to the next `&`. There the value ends at the first
+      // space, quote or angle bracket, and the rest is kept.
+      if (!_notForm.hasMatch(text)) {
+        return _maskPairs(text, _fields, _maskField) ?? text;
+      }
+      return _maskPairs(text, _fields, (name, value) {
+            final end = value.indexOf(_valueEnd);
+            if (end < 0) return _maskField(name, value);
+            return _maskField(name, value.substring(0, end)) +
+                value.substring(end);
+          }) ??
+          text;
     }
     final Object? decoded;
     try {

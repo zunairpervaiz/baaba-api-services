@@ -196,7 +196,7 @@ class ApiConfig {
   ///     return Failure(
   ///       failure.errorType,
   ///       failure.code,
-  ///       'Your account is locked. Contact HR.',
+  ///       'Your account is locked. Contact support.',
   ///       data: failure.data,
   ///       statusCode: failure.statusCode,
   ///     );

@@ -58,6 +58,24 @@ void main() {
       expect(post, isNot(postB));
     });
 
+    test('endpoints Dio sends to different urls get different keys', () {
+      String key(String endpoint) =>
+          buildUrlKey(baseUrl: 'https://x.test/v1', endpoint: endpoint);
+
+      // Dio requests https://x.test/v1 for '' and https://x.test/v1/ for '/'.
+      expect(key(''), isNot(key('/')));
+      expect(key('?p=2'), isNot(key('/?p=2')));
+      expect(key('users'), key('/users'));
+    });
+
+    test('header values containing separators cannot collide', () {
+      String? key(Map<String, String> headers) =>
+          buildRequestKey(method: 'GET', endpoint: '/a', headers: headers);
+
+      expect(key({'accept': 'x,b:y'}), isNot(key({'accept': 'x', 'b': 'y'})));
+      expect(key({'A': '1', 'b': '2'}), key({'b': '2', 'a': '1'}));
+    });
+
     test('an unencodable body returns null, meaning "do not collapse"', () {
       expect(
         buildRequestKey(method: 'GET', endpoint: '/a', data: Object()),

@@ -135,18 +135,23 @@ void main() {
       expect(logger.responseHeader, isFalse);
     });
 
-    test('wraps the logger in redaction by default, and not when redact is '
-        'off', () {
-      expect(
-        dioFactory.getDio().interceptors.whereType<RedactingLogInterceptor>(),
-        hasLength(1),
-      );
+    test('wraps the logger in redaction by default, and without a redactor '
+        'when redact is off', () {
+      final wrapped = dioFactory
+          .getDio()
+          .interceptors
+          .whereType<RedactingLogInterceptor>();
+      expect(wrapped, hasLength(1));
+      expect(wrapped.single.redactor, isNotNull);
 
+      // Still wrapped, so binary bodies are summarized.
       final bare = dioFactory.getDio(
         config: const ApiConfig(logging: ApiLogOptions(redact: false)),
       );
-      expect(bare.interceptors.whereType<RedactingLogInterceptor>(), isEmpty);
-      expect(bare.interceptors.whereType<PrettyDioLogger>(), hasLength(1));
+      final unredacted = bare.interceptors.whereType<RedactingLogInterceptor>();
+      expect(unredacted, hasLength(1));
+      expect(unredacted.single.redactor, isNull);
+      expect(bare.interceptors.whereType<PrettyDioLogger>(), isEmpty);
     });
 
     test('forwards every ApiLogOptions field to PrettyDioLogger', () {

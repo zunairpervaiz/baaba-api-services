@@ -257,7 +257,28 @@ class FakeApiServices implements ApiServices {
     );
 
     final queue = _stubs[_key(method, endpoint)];
-    if (queue == null || queue.isEmpty) {
+    final next = queue == null || queue.isEmpty ? null : queue.first;
+
+    // The offline short-circuit never builds a request, in production or
+    // here; anything else "went out", so the observer hears about it and a
+    // failure carries the request that produced it, as a real one does.
+    final offline =
+        next?.fold(
+          (f) => f.errorType == ErrorSource.noInternetConnection,
+          (_) => false,
+        ) ??
+        false;
+
+    // Production fails an already-cancelled request before sending it, so a
+    // test of cancel-on-dispose sees the same Left here — but only after the
+    // connectivity check, which it runs first: offline wins over cancelled.
+    // Checked before the stub is required or consumed: a cancelled call never
+    // reaches the server, so it must not use up a scripted response.
+    if (!offline && (cancelToken?.isCancelled ?? false)) {
+      return _report(left(ErrorSource.cancel.getFailure()));
+    }
+
+    if (queue == null || next == null) {
       throw StateError(
         'FakeApiServices: no stub for ${method.value} $endpoint.\n'
         'Add one with stubJson(HttpMethod.${method.name}, \'$endpoint\', ...) '
@@ -266,22 +287,8 @@ class FakeApiServices implements ApiServices {
     }
 
     // Keep the last entry so repeated polling of one endpoint keeps working.
-    final result = queue.length == 1 ? queue.first : queue.removeAt(0);
+    final result = queue.length == 1 ? next : queue.removeAt(0);
 
-    // The offline short-circuit never builds a request, in production or
-    // here; anything else "went out", so the observer hears about it and a
-    // failure carries the request that produced it, as a real one does.
-    final offline = result.fold(
-      (f) => f.errorType == ErrorSource.noInternetConnection,
-      (_) => false,
-    );
-
-    // Production fails an already-cancelled request before sending it, so a
-    // test of cancel-on-dispose sees the same Left here — but only after the
-    // connectivity check, which it runs first: offline wins over cancelled.
-    if (!offline && (cancelToken?.isCancelled ?? false)) {
-      return _report(left(ErrorSource.cancel.getFailure()));
-    }
     final options = offline
         ? null
         : RequestOptions(
@@ -295,8 +302,12 @@ class FakeApiServices implements ApiServices {
     if (options != null) {
       _observe((o) => o.onRequest(_redactor?.request(options) ?? options));
     }
-    final sent = result.mapLeft(
+    // Both sides carry the request actually sent, as in production: a stub
+    // is built without one, so a stubbed POST would otherwise report GET.
+    // Copied, not mutated, because the last stub is reused.
+    final sent = result.bimap(
       (f) => f.requestOptions == null ? f.withRequest(options) : f,
+      (response) => options == null ? response : _sentAs(response, options),
     );
 
     // ApiConfig.isSuccess applies here as it does in production, so a stubbed
@@ -388,6 +399,21 @@ class FakeApiServices implements ApiServices {
       }
     });
   }
+
+  /// [response] as if it answered [options].
+  static Response<dynamic> _sentAs(
+    Response<dynamic> response,
+    RequestOptions options,
+  ) => Response<dynamic>(
+    data: response.data,
+    requestOptions: options,
+    statusCode: response.statusCode,
+    statusMessage: response.statusMessage,
+    isRedirect: response.isRedirect,
+    redirects: response.redirects,
+    extra: response.extra,
+    headers: response.headers,
+  );
 
   @override
   Future<Either<Failure, Response>> get({

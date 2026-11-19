@@ -18,6 +18,25 @@ void main() {
     expect(keyForMemberName('apiV2Url'), 'API_V2_URL');
     expect(keyForMemberName('timeout'), 'TIMEOUT');
     expect(keyForMemberName('hubURL'), 'HUB_URL');
+    expect(keyForMemberName('s3Bucket'), 'S3_BUCKET');
+    expect(keyForMemberName('oauth2ClientId'), 'OAUTH2_CLIENT_ID');
+    expect(keyForMemberName('sha256'), 'SHA256');
+    expect(keyForMemberName('baseURLPath'), 'BASE_URL_PATH');
+  });
+
+  test('a key round-trips through its member name', () {
+    for (final key in ['S3_BUCKET', 'API_V2_URL', 'OAUTH2_CLIENT_ID']) {
+      expect(keyForMemberName(memberNameForKey(key)), key);
+    }
+  });
+
+  test("a field also reads 1.0.0's key, then its own name", () {
+    expect(keysForMemberName('s3Bucket'), [
+      'S3_BUCKET',
+      'S_3_BUCKET',
+      's3Bucket',
+    ]);
+    expect(keysForMemberName('baseUrl'), ['BASE_URL', 'baseUrl']);
   });
 
   test('member names must be public, non-reserved identifiers', () {

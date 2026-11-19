@@ -1,8 +1,6 @@
 name: baaba_api_generator
 description: "build_runner generator for baaba_api_handler: typed, obfuscated API endpoints and environment values from .env files."
-version: 1.0.0
-repository: https://github.com/zunairpervaiz/baaba-api-services/tree/master/packages/baaba_api_generator
-issue_tracker: https://github.com/zunairpervaiz/baaba-api-services/issues
+version: 1.0.1
 
 topics:
   - codegen

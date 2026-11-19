@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:baaba_api_handler/ts_api_handler.dart';
-import 'package:dio/dio.dart' show Headers, ResponseBody;
+import 'package:dio/dio.dart' show Headers, RedirectRecord, ResponseBody;
 import 'package:flutter_test/flutter_test.dart';
 
 /// The token must not travel to hosts that are not ours.
@@ -16,7 +16,11 @@ class _Adapter implements HttpClientAdapter {
   final List<RequestOptions> requests = [];
   final int Function(RequestOptions options)? status;
 
-  _Adapter({this.status});
+  /// Where the request was redirected before its answer, hop by hop, as
+  /// `HttpClient` records them: each location as written, unresolved.
+  final List<Uri> redirectedTo;
+
+  _Adapter({this.status, this.redirectedTo = const []});
 
   @override
   Future<ResponseBody> fetch(
@@ -26,12 +30,16 @@ class _Adapter implements HttpClientAdapter {
   ) async {
     requests.add(options);
     return ResponseBody.fromString(
-      '{}',
-      status?.call(options) ?? 200,
-      headers: {
-        Headers.contentTypeHeader: [Headers.jsonContentType],
-      },
-    );
+        '{}',
+        status?.call(options) ?? 200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+        isRedirect: redirectedTo.isNotEmpty,
+      )
+      ..redirects = [
+        for (final to in redirectedTo) RedirectRecord(302, 'GET', to),
+      ];
   }
 
   String? authFor(String host) =>
@@ -212,6 +220,74 @@ void main() {
       await ApiServices.instance().get(endpoint: _analytics);
 
       expect(loggedOut, isFalse);
+    });
+
+    test('a 401 at the end of a redirect to another host does not '
+        'trigger a refresh', () async {
+      // Our API redirects to a CDN whose signed url has expired. The CDN
+      // never saw our token — it is dropped on a cross-origin hop.
+      var refreshes = 0;
+      var loggedOut = false;
+      final adapter = _Adapter(
+        status: (_) => 401,
+        redirectedTo: [Uri.parse('https://cdn.other.net/signed?sig=old')],
+      );
+      init(
+        adapter,
+        onTokenRefresh: () async {
+          refreshes++;
+          return false;
+        },
+        onRefreshFailed: () => loggedOut = true,
+      );
+
+      await ApiServices.instance().get(endpoint: '/files/1');
+
+      expect(refreshes, 0);
+      expect(loggedOut, isFalse);
+    });
+
+    test('a relative redirect is resolved against the hop before it', () async {
+      // api → cdn → `/expired` on the cdn. Resolved against the original
+      // request, `/expired` looked like our own host.
+      var refreshes = 0;
+      final adapter = _Adapter(
+        status: (_) => 401,
+        redirectedTo: [
+          Uri.parse('https://cdn.other.net/x'),
+          Uri.parse('/expired'),
+        ],
+      );
+      init(
+        adapter,
+        onTokenRefresh: () async {
+          refreshes++;
+          return false;
+        },
+      );
+
+      await ApiServices.instance().get(endpoint: '/files/1');
+
+      expect(refreshes, 0);
+    });
+
+    test('a relative redirect stays on our host and still refreshes', () async {
+      var refreshes = 0;
+      final adapter = _Adapter(
+        status: (_) => 401,
+        redirectedTo: [Uri.parse('/files/2')],
+      );
+      init(
+        adapter,
+        onTokenRefresh: () async {
+          refreshes++;
+          return false;
+        },
+      );
+
+      await ApiServices.instance().get(endpoint: '/files/1');
+
+      expect(refreshes, 1);
     });
 
     test('a 401 from our own host still refreshes and replays', () async {

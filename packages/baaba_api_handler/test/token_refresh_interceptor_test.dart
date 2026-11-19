@@ -612,6 +612,55 @@ void main() {
       expect(refreshes, 1, reason: '/l predates the refresh; replay it');
     });
 
+    test('a refresh that completes while a 401 reads the token is not '
+        'repeated', () async {
+      // /l's 401 is checking whether the token changed. While getToken runs,
+      // /e's 401 refreshes and replays from start to finish. getToken had
+      // already read the old token, so only the generation shows /l predates
+      // that refresh; without a second look after the await, /l refreshed
+      // again.
+      var refreshes = 0;
+      Completer<void>? holdGetToken;
+      final lCheckingToken = Completer<void>();
+      final release = Completer<void>();
+
+      dio.httpClientAdapter = _MockAdapter((options) async {
+        if (options.extra['_tokenRetried'] == true) return _ok();
+        // Hold the getToken call /l's 401 makes, and only that one.
+        if (options.path == '/l') holdGetToken = release;
+        return _unauthorized();
+      });
+
+      dio.interceptors.add(
+        TokenRefreshInterceptor(
+          dio: dio,
+          getToken: () async {
+            final hold = holdGetToken;
+            if (hold != null) {
+              holdGetToken = null;
+              lCheckingToken.complete();
+              await hold.future;
+            }
+            return 'same';
+          },
+          onTokenRefresh: () async {
+            refreshes++;
+            return true;
+          },
+        ),
+      );
+
+      final l = dio.get('/l');
+      await lCheckingToken.future;
+
+      expect((await dio.get('/e')).statusCode, 200);
+      expect(refreshes, 1);
+
+      release.complete();
+      expect((await l).statusCode, 200);
+      expect(refreshes, 1, reason: '/l predates the refresh; replay it');
+    });
+
     test('a stream body is not replayed after a 401', () async {
       var calls = 0;
       dio.httpClientAdapter = _MockAdapter((options) async {

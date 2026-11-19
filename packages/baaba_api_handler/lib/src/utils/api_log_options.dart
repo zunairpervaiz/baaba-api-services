@@ -37,8 +37,9 @@
 /// ApiServices.init(const ApiConfig(logging: ApiLogOptions.disabled()));
 /// ```
 class ApiLogOptions {
-  /// Master switch. When `false` no logger is attached at all and every other
-  /// field is ignored.
+  /// Master switch. When `false` no logger is attached and the printing
+  /// fields are ignored; the `redact*` fields still mask what
+  /// `ApiConfig.observer` receives.
   final bool enabled;
 
   /// Print the request line (method + URL).
@@ -59,7 +60,8 @@ class ApiLogOptions {
   /// Print response headers.
   final bool responseHeader;
 
-  /// Print the response body.
+  /// Print the response body. A binary one — bytes asked for with
+  /// `ResponseType.bytes` — prints as `<48213 bytes, image/png>`.
   final bool responseBody;
 
   /// Print errors (`DioException`s, including non-2xx responses).

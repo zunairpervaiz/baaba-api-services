@@ -225,6 +225,27 @@ void main() {
     expect(sent.value.filename, 'baaba_upload_test.txt');
   });
 
+  test(
+    'cancelRequest(tag:) while the files are read stops the upload',
+    () async {
+      final file = File('${Directory.systemTemp.path}/baaba_upload_cancel.txt');
+      await file.writeAsString('hello');
+      addTearDown(() => file.existsSync() ? file.deleteSync() : null);
+
+      // upload() is still reading the file when the cancel lands.
+      final pending = api.upload(
+        endpoint: '/documents',
+        files: [UploadFile.fromPath(field: 'doc', path: file.path)],
+        tag: 'profile',
+      );
+      api.cancelRequest(tag: 'profile');
+
+      final result = await pending;
+      expect(result.getLeft().toNullable()?.errorType, ErrorSource.cancel);
+      expect(calls, isEmpty);
+    },
+  );
+
   test('a missing file becomes a Failure, not an exception', () async {
     final result = await api.upload(
       endpoint: '/documents',

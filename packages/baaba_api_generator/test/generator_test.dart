@@ -181,6 +181,42 @@ abstract final class Endpoints {
       );
       expect(_decoded(g.output!), ['orders']);
     });
+
+    test('a digit stays with its word: s3Bucket reads S3_BUCKET', () async {
+      // The typedef form maps S3_BUCKET to s3Bucket, so the class form has
+      // to map back to it — this read S_3_BUCKET and failed the build.
+      final g = await generate(
+        library('''
+@BaabaApiEnvironment(path: 'env/app.env')
+abstract final class Env {
+  static final String s3Bucket = _Env.s3Bucket;
+  static final String oauth2ClientId = _Env.oauth2ClientId;
+  static final String baseURLPath = _Env.baseURLPath;
+}
+'''),
+        {
+          'env/app.env':
+              'S3_BUCKET=media-store\nOAUTH2_CLIENT_ID=client-x\n'
+              'BASE_URL_PATH=api',
+        },
+      );
+      expect(g.errors, isEmpty);
+      expect(_decoded(g.output!), ['media-store', 'client-x', 'api']);
+    });
+
+    test("1.0.0's split-digit key is still found", () async {
+      final g = await generate(
+        library('''
+@BaabaApiEnvironment(path: 'env/app.env')
+abstract final class Env {
+  static final String s3Bucket = _Env.s3Bucket;
+}
+'''),
+        {'env/app.env': 'S_3_BUCKET=media-store'},
+      );
+      expect(g.errors, isEmpty);
+      expect(_decoded(g.output!), ['media-store']);
+    });
   });
 
   group('@BaabaApiEnvironment', () {
@@ -350,6 +386,20 @@ abstract final class Endpoints {
         {'env/endpoints.env': 'LOGIN=auth/login'},
       );
       expect(message, contains('Endpoints.login has no declared type'));
+    });
+
+    test('a class field named like generated storage is rejected', () async {
+      final message = await errorFor(
+        '''
+@BaabaApiEnvironment(path: 'env/stage.env')
+abstract final class StageEnv {
+  static final String _v0 = _StageEnv._v0;
+  static String get baseUrl => _v0;
+}
+''',
+        {'env/stage.env': '_v0=https://api.example.com'},
+      );
+      expect(message, contains('StageEnv._v0 clashes with a name'));
     });
 
     test('a duplicate key, with both lines', () async {

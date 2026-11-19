@@ -267,6 +267,23 @@ void main() {
       expect(result.getLeft().toNullable()!.errorType, ErrorSource.cancel);
     });
 
+    test('an already-cancelled call needs no stub and uses none up', () async {
+      final token = CancelToken()..cancel();
+
+      // No stub at all: production never reaches the server, so neither may
+      // the fake demand a response for it.
+      final unstubbed = await api.get(endpoint: '/feed', cancelToken: token);
+      expect(unstubbed.getLeft().toNullable()!.errorType, ErrorSource.cancel);
+
+      // A scripted sequence is left intact for the next real call.
+      api
+        ..stubFailure(HttpMethod.get, '/users/1', statusCode: 500)
+        ..stubJson(HttpMethod.get, '/users/1', {'id': 1});
+      await api.get(endpoint: '/users/1', cancelToken: token);
+      final first = await api.get(endpoint: '/users/1');
+      expect(first.getLeft().toNullable()?.statusCode, 500);
+    });
+
     test(
       'offline beats an already-cancelled token, as in production',
       () async {
@@ -312,6 +329,17 @@ void main() {
 
       expect(observer.events, ['request GET /users/1', 'response 200']);
       expect(observer.requests.single.queryParameters, {'full': true});
+    });
+
+    test('a success carries the request that produced it', () async {
+      api.stubJson(HttpMethod.post, '/users', {'id': 1});
+
+      final result = await api.post(endpoint: '/users', data: {'name': 'Ada'});
+
+      expect(observer.events, ['request POST /users', 'response 200']);
+      final sent = result.getRight().toNullable()!.requestOptions;
+      expect(sent.method, 'POST');
+      expect(sent.data, {'name': 'Ada'});
     });
 
     test('a failure carries the request that produced it', () async {

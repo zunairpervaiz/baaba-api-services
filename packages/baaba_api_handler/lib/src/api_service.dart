@@ -189,6 +189,7 @@ abstract interface class ApiServices {
         probe: config.connectivityProbe,
       ),
       name: name,
+      ownsTransport: config.httpClientAdapter == null,
     );
   }
 
@@ -214,6 +215,7 @@ abstract interface class ApiServices {
         cacheTtl: config.connectivityCacheTtl,
         probe: config.connectivityProbe,
       ),
+      ownsTransport: dio == null && config.httpClientAdapter == null,
     );
   }
 
@@ -353,8 +355,10 @@ abstract interface class ApiServices {
   /// **De-duplication.** Two identical GETs in flight at the same time share
   /// one network call by default. Pass `dedupe: false` to force a separate
   /// request. Automatically skipped when you supply your own [cancelToken] or
-  /// a [tag], since cancelling one caller must not cancel the other, and when
-  /// you pass a progress callback, which only one caller's request can drive.
+  /// a [tag], since cancelling one caller must not cancel the other, when
+  /// you pass a progress callback, which only one caller's request can drive,
+  /// and when you pass your own [receiveTimeout] or [sendTimeout], since one
+  /// caller's deadline must not apply to another.
   ///
   /// **Per-call retry and extras** — on every request method:
   ///
@@ -705,8 +709,8 @@ abstract interface class ApiServices {
   /// Defaults to `POST`; pass [method] for an API that expects `PUT` or
   /// `PATCH`.
   ///
-  /// A timeout is never retried, since the server may already have stored the
-  /// file. A `429` or `503` is, because the server said it did not process the
+  /// A timeout is not retried unless you pass `retryable: true`, since the
+  /// server may already have stored the file. A `429` or `503` is, because the server said it did not process the
   /// request — as is a replay after a `401` refresh, which matters for an
   /// upload long enough to outlive its token. In both cases the multipart body
   /// is rebuilt first: it is a stream, and sending the consumed one would
@@ -836,11 +840,18 @@ class ApiServicesImplementation implements ApiServices {
   // the same name still sends through this Dio.
   final String? _baseUrl;
 
+  /// Whether the package built this client's adapter, and so may close it
+  /// on [_close]. A caller's own `httpClientAdapter` (or Dio, in tests) may
+  /// be shared with another client and is theirs to close.
+  final bool _ownsTransport;
+
   ApiServicesImplementation._({
     required Dio dio,
     NetworkInfo? networkInfo,
     required String name,
+    bool ownsTransport = false,
   }) : _dio = dio,
+       _ownsTransport = ownsTransport,
        _name = name,
        _baseUrl = ApiServices.configOf(name).baseUrl,
        _networkInfo = networkInfo ?? NetworkInfo(),
@@ -859,11 +870,13 @@ class ApiServicesImplementation implements ApiServices {
     required Dio dio,
     NetworkInfo? networkInfo,
     String name = ApiServices.defaultClient,
+    bool ownsTransport = false,
   }) {
     return ApiServicesImplementation._(
       dio: dio,
       networkInfo: networkInfo,
       name: name,
+      ownsTransport: ownsTransport,
     );
   }
 
@@ -935,6 +948,9 @@ class ApiServicesImplementation implements ApiServices {
     // handed to Dio, so a follower's progress bar would sit at zero until the
     // response arrived.
     //
+    // Per-call timeouts too: a follower relying on the default 60s would
+    // otherwise inherit an originator's 2s deadline and fail with its timeout.
+    //
     // A request made from inside onTokenRefresh skips the concurrency gate,
     // but a follower never reaches the gate — it waits on the originator. If
     // that originator is queued behind the request awaiting this refresh,
@@ -944,7 +960,9 @@ class ApiServicesImplementation implements ApiServices {
         call.cancelToken != null ||
         call.tag != null ||
         call.onSendProgress != null ||
-        call.onReceiveProgress != null) {
+        call.onReceiveProgress != null ||
+        call.receiveTimeout != null ||
+        call.sendTimeout != null) {
       return null;
     }
 
@@ -1029,6 +1047,10 @@ class ApiServicesImplementation implements ApiServices {
   void _close() {
     _closed = true;
     cancelRequest(cancellationReason: _closedReason);
+    // Releases the pooled connections now rather than leaving them open until
+    // the idle timeout. Not forced: everything in flight was just cancelled,
+    // and nothing new reaches Dio — _tracked cancels it first.
+    if (_ownsTransport) _dio.close();
   }
 
   /// Runs [send] once the concurrency gate admits it.
@@ -1671,44 +1693,48 @@ class ApiServicesImplementation implements ApiServices {
   }) async {
     final hold = showLoader ? _showLoader() : null;
     try {
-      final FormData formData;
-      try {
-        // Files are appended as entries, not put in the map: several files
-        // under one field — `images` for a gallery — would be duplicate keys
-        // there, and all but the last would silently vanish.
-        formData = FormData.fromMap(fields);
-        for (final file in files) {
-          formData.files.add(
-            MapEntry(file.field, await file.toMultipartFile()),
-          );
+      // Tracked from the start, so a cancelRequest(tag:) that lands while the
+      // files are still being read stops the upload rather than missing it.
+      return await _tracked(cancelToken, tag, (token) async {
+        final FormData formData;
+        try {
+          // Files are appended as entries, not put in the map: several files
+          // under one field — `images` for a gallery — would be duplicate keys
+          // there, and all but the last would silently vanish.
+          formData = FormData.fromMap(fields);
+          for (final file in files) {
+            formData.files.add(
+              MapEntry(file.field, await file.toMultipartFile()),
+            );
+          }
+        } catch (e) {
+          // A missing or unreadable file should surface as a Failure like
+          // anything else, not as an exception out of an Either-returning API.
+          // Reported here because this never reaches _sendRequest.
+          return _notify(left(_toFailure(e)));
         }
-      } catch (e) {
-        // A missing or unreadable file should surface as a Failure like
-        // anything else, not as an exception out of an Either-returning API.
-        // Reported here because this never reaches _sendRequest.
-        return _notify(left(_toFailure(e)));
-      }
 
-      return await _sendRequest(
-        _Call(
-          method,
-          endpoint: endpoint,
-          data: formData,
-          params: params,
-          receiveTimeout: receiveTimeout,
-          sendTimeout: sendTimeout,
-          headers: headers,
-          onSendProgress: onSendProgress,
-          cancelToken: cancelToken,
-          responseType: responseType,
-          tag: tag,
-          retryable: retryable,
-          extra: extra,
-        ),
-        // The loader is already held for the whole operation, file reads
-        // included; nesting another show/hide would double-count it.
-        showLoader: false,
-      );
+        return await _sendRequest(
+          _Call(
+            method,
+            endpoint: endpoint,
+            data: formData,
+            params: params,
+            receiveTimeout: receiveTimeout,
+            sendTimeout: sendTimeout,
+            headers: headers,
+            onSendProgress: onSendProgress,
+            cancelToken: token,
+            responseType: responseType,
+            tag: tag,
+            retryable: retryable,
+            extra: extra,
+          ),
+          // The loader is already held for the whole operation, file reads
+          // included; nesting another show/hide would double-count it.
+          showLoader: false,
+        );
+      });
     } finally {
       if (hold != null) _hideLoader(hold);
     }
@@ -1899,7 +1925,15 @@ class _RequestGate {
   final int? limit;
 
   int _active = 0;
-  final Queue<Completer<bool>> _waiting = Queue<Completer<bool>>();
+  final Queue<({Completer<bool> waiter, CancelToken token})> _waiting =
+      Queue<({Completer<bool> waiter, CancelToken token})>();
+
+  /// Tokens this gate already listens to. A future cannot be unsubscribed
+  /// from, so a listener per queued request kept every waiter alive until its
+  /// token was cancelled — thousands, for an app sharing one long-lived token.
+  /// One listener per token instead; an [Expando] so the gate never keeps a
+  /// token alive.
+  final Expando<bool> _listening = Expando<bool>('_RequestGate');
 
   /// A cap below one is rejected by `ApiConfig`'s assert in debug builds. In
   /// release it is raised to one rather than honoured: zero slots would queue
@@ -1924,12 +1958,25 @@ class _RequestGate {
     }
 
     final waiter = Completer<bool>();
-    _waiting.add(waiter);
-    token.whenCancel.then((_) {
-      // Still queued means release() never handed it a slot.
-      if (_waiting.remove(waiter)) waiter.complete(false);
-    });
+    _waiting.add((waiter: waiter, token: token));
+    if (_listening[token] == null) {
+      _listening[token] = true;
+      token.whenCancel.then((_) => _cancelWaiting(token));
+    }
     return waiter.future;
+  }
+
+  /// Fails every request still queued under [token]. Still queued means
+  /// [release] never handed it a slot, so there is none to give back.
+  void _cancelWaiting(CancelToken token) {
+    final cancelled = [
+      for (final entry in _waiting)
+        if (identical(entry.token, token)) entry.waiter,
+    ];
+    _waiting.removeWhere((entry) => identical(entry.token, token));
+    for (final waiter in cancelled) {
+      waiter.complete(false);
+    }
   }
 
   void release() {
@@ -1940,7 +1987,7 @@ class _RequestGate {
     // the queue first-in-first-out, so a request made early cannot be starved
     // by a burst of later ones.
     if (_waiting.isNotEmpty) {
-      _waiting.removeFirst().complete(true);
+      _waiting.removeFirst().waiter.complete(true);
       return;
     }
 

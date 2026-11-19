@@ -340,21 +340,35 @@ class _EnvSource {
   /// The static fields of the annotated class — for the class form. A
   /// `const` field is skipped: a generated value is decoded at runtime, so a
   /// `const` can never be reading one, and is the class's own helper.
-  Iterable<FieldElement> fields() => (element as ClassElement).fields.where(
-    (f) => f.isStatic && f.isOriginDeclaration && !f.isConst,
-  );
+  ///
+  /// A private field named like generated storage (`_v0`) is rejected: the
+  /// generated class would declare the name twice and fail to compile.
+  Iterable<FieldElement> fields() sync* {
+    for (final field in (element as ClassElement).fields) {
+      if (!field.isStatic || !field.isOriginDeclaration || field.isConst) {
+        continue;
+      }
+      if (Emitter.isStorageName(field.name ?? '')) {
+        throw fieldError(
+          field,
+          'clashes with a name the generator uses for storage. Rename the '
+          'field',
+        );
+      }
+      yield field;
+    }
+  }
 
   /// The entry [field] reads: its `@BaabaApiField` name, else its UPPER_SNAKE
-  /// name, else its name as written (how `envied` reads it).
+  /// name (`keysForMemberName`), else its name as written (how `envied` reads
+  /// it).
   EnvEntry entryFor(FieldElement field) {
     final name = field.name ?? '';
     final override = _apiField
         .firstAnnotationOf(field)
         ?.getField('name')
         ?.toStringValue();
-    final candidates = override != null
-        ? [override]
-        : {keyForMemberName(name), name}.toList();
+    final candidates = override != null ? [override] : keysForMemberName(name);
     for (final key in candidates) {
       for (final entry in entries) {
         if (entry.key == key) return entry;

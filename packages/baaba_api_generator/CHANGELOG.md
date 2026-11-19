@@ -1,3 +1,8 @@
+## 1.0.1
+
+* **A class-form field with a digit in its name finds its key.** `s3Bucket` looked for `S_3_BUCKET` and failed the build against the usual `S3_BUCKET` — the key the typedef form maps to `s3Bucket` — and the same for `oauth2ClientId`, `sha256Pin` and the like. A digit now stays with the word before it, and an acronym ends before the next word (`baseURLPath` → `BASE_URL_PATH`). A file that already uses 1.0.0's spelling (`S_3_BUCKET`) is still read.
+* **A class-form field named like generated storage is a build error** rather than generated code that does not compile. A private field such as `static final String _v0` collided with the generator's own `_v0` and declared it twice; the build now names the field and asks for a rename.
+
 ## 1.0.0
 
 First release.

@@ -4,6 +4,7 @@ library;
 import 'dart:io';
 
 import 'package:baaba_api_handler/io.dart';
+import 'package:baaba_api_handler/src/transport/transport_io.dart';
 import 'package:baaba_api_handler/ts_api_handler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -140,6 +141,23 @@ void main() {
       expect(errorOf(result), ErrorSource.certificateRejected);
       expect(result.getLeft().toNullable()?.requestOptions, isNotNull);
       expect(server.paths, isEmpty);
+    });
+
+    test('a closed adapter builds no new client', () async {
+      // Without the guard a fetch after close() built a fresh HttpClient —
+      // here, the first use of the system one — that nothing would close.
+      final adapter = PinnedRoutingAdapter(
+        pinning: const PinningConfig(
+          rootsPemByHost: {
+            'pinned.test': ['unused'],
+          },
+        ),
+      )..close();
+
+      await expectLater(
+        adapter.fetch(RequestOptions(path: 'https://localhost/'), null, null),
+        throwsStateError,
+      );
     });
 
     test('a PEM that does not parse fails closed', () async {

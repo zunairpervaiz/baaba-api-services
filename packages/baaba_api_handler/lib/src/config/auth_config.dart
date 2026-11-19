@@ -129,6 +129,11 @@ class AuthConfig {
   ///   'X-Tenant-Id': 'my-org',
   /// },
   /// ```
+  ///
+  /// Every header returned is treated as a credential and dropped on a
+  /// redirect to another origin, as `Authorization` is. On web, and with a
+  /// caller-supplied `ApiConfig.httpClientAdapter`, redirects are not the
+  /// package's to follow, so this cannot be enforced there.
   final Map<String, String> Function(String token)? headerBuilder;
 
   /// Decides which hosts the token may be sent to.

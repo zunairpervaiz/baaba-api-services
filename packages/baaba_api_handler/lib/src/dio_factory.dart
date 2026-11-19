@@ -27,7 +27,9 @@ class DioFactory {
   ///    and the logger so replays re-run them and the log shows their work.
   /// 3. [NetworkRetryInterceptor] — retries transient failures. After auth, so
   ///    a retry carries a valid token.
-  /// 4. [PrettyDioLogger] — non-release builds only.
+  /// 4. [PrettyDioLogger] — non-release builds only, behind
+  ///    [RedactingLogInterceptor], which masks secrets and prints a binary
+  ///    body as `<N bytes, type>`.
   /// 5. [ObserverInterceptor] — last, so `onRequest` sees the request as it
   ///    actually goes out, once per attempt. Outcomes (`onResponse`,
   ///    `onFailure`) are reported by the service layer, not from here.
@@ -47,11 +49,27 @@ class DioFactory {
     );
 
     // A caller's own adapter wins; failing that, pinning and proxy get one
-    // that honours them (on IO — on web the browser owns the transport).
-    // Otherwise Dio's default stays.
+    // that honours them (on IO — on web the browser owns the transport), as
+    // does a token in a custom header, which only that adapter keeps off a
+    // cross-origin redirect. Otherwise Dio's default stays.
+    // ApiConfig asserts against this, but asserts are gone in release, where
+    // the caller's adapter would win and pinning would be dropped without a
+    // word. A pin that silently stops pinning is the worst way for it to
+    // fail, so it is refused in every build.
+    if (config.httpClientAdapter != null &&
+        (config.pinning != null || (config.proxy?.isActive ?? false))) {
+      throw ArgumentError(
+        'httpClientAdapter replaces the transport that pinning and proxy '
+        'configure. Use one or the other.',
+      );
+    }
     final adapter =
         config.httpClientAdapter ??
-        createTransportAdapter(pinning: config.pinning, proxy: config.proxy);
+        createTransportAdapter(
+          pinning: config.pinning,
+          proxy: config.proxy,
+          tokenInCustomHeader: config.auth?.headerBuilder != null,
+        );
     if (adapter != null) dio.httpClientAdapter = adapter;
 
     final auth = config.auth;
@@ -84,10 +102,9 @@ class DioFactory {
         compact: config.logging.compact,
         logPrint: _logSink(config.logging),
       );
+      // Always wrapped: binary bodies are summarized even with redaction off.
       dio.interceptors.add(
-        redactor == null
-            ? logger
-            : RedactingLogInterceptor(logger: logger, redactor: redactor),
+        RedactingLogInterceptor(logger: logger, redactor: redactor),
       );
     }
 

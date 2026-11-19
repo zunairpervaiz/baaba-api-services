@@ -55,7 +55,7 @@ result.fold(
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^5.0.0
+  baaba_api_handler: ^5.0.1
 ```
 
 Requires Flutter 3.32 / Dart 3.8 or newer. Works on Android, iOS, web, and desktop.
@@ -176,11 +176,11 @@ Apps usually keep their hosts and paths out of the code, in `.env` files, and wa
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^5.0.0
+  baaba_api_handler: ^5.0.1
 
 dev_dependencies:
   build_runner: ^2.4.0
-  baaba_api_generator: ^1.0.0
+  baaba_api_generator: ^1.0.1
 ```
 
 **2. `build.yaml` — required.** build_runner only reads files listed in your app's `build.yaml` sources, and the defaults do not include `env/`. Skip this and the build fails with "cannot read env/endpoints.env" (with `envied`, the same omission surfaced as "Environment variable not found"). Listing `sources` replaces the defaults, so keep `lib/**`:
@@ -275,7 +275,7 @@ If the parser throws, you get a `Failure` with `ErrorSource.parseError` and the 
 
 ### Request parameters
 
-Shared by every HTTP method:
+Shared by the request methods. `head` and `options` take no body or progress callbacks, `upload` takes `fields`/`files` in place of `data`, and `download` takes only `onReceiveProgress`.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -286,6 +286,8 @@ Shared by every HTTP method:
 | `receiveTimeout` | `Duration?` | Overrides the configured receive timeout. |
 | `sendTimeout` | `Duration?` | Overrides the configured send timeout. |
 | `cancelToken` | `CancelToken?` | Cancels this specific request. |
+| `tag` | `String?` | Groups requests for `cancelRequest(tag: ...)`. |
+| `responseType` | `ResponseType?` | `bytes`, `plain` or `stream` instead of decoded JSON. Not on `head` or `download`. |
 | `onSendProgress` | `ProgressCallback?` | Upload progress. |
 | `onReceiveProgress` | `ProgressCallback?` | Download progress. |
 | `showLoader` | `bool` | Opt this request out of the global loader. Defaults to `true`. |
@@ -312,7 +314,7 @@ final csv = await api.get(
 );
 ```
 
-It works on every method, including the `*As<T>` variants, where the parser then receives whatever the response type produced rather than decoded JSON.
+It works on every method except `head` and `download`, including the `*As<T>` variants, where the parser then receives whatever the response type produced rather than decoded JSON.
 
 For a file you want on disk rather than in memory, use [`download`](#downloads) — it streams and never holds the whole body.
 
@@ -356,7 +358,7 @@ UploadFile.fromBytes(field: 'avatar', bytes: pickedBytes, filename: 'avatar.png'
 
 Uploads default to `POST`; pass `method:` for an API that expects `PUT` or `PATCH`.
 
-A timeout on an upload is never retried — the server may already have stored the file. A `429` or `503` is, because the server said it did not process the request, and so is a replay after a `401` token refresh, which matters for an upload long enough to outlive its token. In both cases the multipart body is rebuilt before resending: it is a stream, read once, and Dio throws if you hand it the consumed one.
+A timeout on an upload is not retried unless you pass `retryable: true` — the server may already have stored the file. A `429` or `503` is, because the server said it did not process the request, and so is a replay after a `401` token refresh, which matters for an upload long enough to outlive its token. In both cases the multipart body is rebuilt before resending: it is a stream, read once, and Dio throws if you hand it the consumed one.
 
 ### Downloads
 
@@ -490,7 +492,7 @@ ApiServices.init(ApiConfig(
       return Failure(
         failure.errorType,
         failure.code,
-        'Your account is locked. Contact HR.',
+        'Your account is locked. Contact support.',
         data: failure.data,
         statusCode: failure.statusCode,
       );
@@ -526,7 +528,7 @@ The first failure stops the flow, and the caller gets it exactly as the client r
 | --- | --- |
 | `future.orThrow()` | On a `Future<Either<Failure, T>>` — any request, typed or not. Returns `T`, or throws `ApiException`. Also on an `Either` you already awaited. |
 | `ApiException` | Wraps the `Failure`: `failure`, plus `statusCode`, `data`, `message` and `errorType` from it. |
-| `guardApi(() async { ... })` | Returns `Future<Either<Failure, T>>` and never throws. An `ApiException` becomes its `Failure`; a thrown `Failure` is returned as is; a `DioException` (Dio used directly in the flow) becomes the `Failure` the client would build, `mapFailure` included (the default client's, or pass `client: 'name'`); anything else is `ErrorSource.defaultError`. |
+| `guardApi(() async { ... })` | Returns `Future<Either<Failure, T>>` and never throws. An `ApiException` becomes its `Failure`; a thrown `Failure` is returned as is; a `DioException` (Dio used directly in the flow) becomes the `Failure` the client would build, `mapFailure` included (the default client's, or pass `client: 'name'`); anything else is `ErrorSource.defaultError`, also passed through `mapFailure`. |
 
 Anything that lands in that last case is a bug rather than a network problem, and the generic `Failure` hides it — pass `onUnexpected` to report it:
 
@@ -565,6 +567,8 @@ AuthConfig(
   },
 )
 ```
+
+Every header `headerBuilder` returns is treated as a credential: on a redirect to another origin it is dropped, as `Authorization` always is. Dart's `HttpClient` only knows to drop `Authorization`, `Cookie` and a few others, so on mobile and desktop the package follows redirects itself for these requests. Two cases it cannot cover: on web the browser follows redirects and keeps custom headers, and a client with its own `httpClientAdapter` follows redirects however that adapter does.
 
 Omit `auth` entirely for an unauthenticated client; `401`s then surface as an ordinary `Failure`.
 
@@ -737,7 +741,7 @@ It must not throw — one that does is read as "offline". To skip the check enti
 
 ## De-duplication
 
-Two identical `GET`s (or `HEAD`/`OPTIONS` requests) in flight at the same time share one network call — the common case being several widgets on one screen asking for the same resource. Pass `dedupe: false` to opt out. "Identical" means the same url, query, body, headers and `responseType` — a request for bytes is never handed another caller's decoded JSON. It is skipped automatically when you supply your own `CancelToken` or a `tag`, since cancelling one caller must not cancel the other, and when you pass a progress callback, which only one caller's request could drive.
+Two identical `GET`s (or `HEAD`/`OPTIONS` requests) in flight at the same time share one network call — the common case being several widgets on one screen asking for the same resource. Pass `dedupe: false` to opt out. "Identical" means the same url, query, body, headers and `responseType` — a request for bytes is never handed another caller's decoded JSON. It is skipped automatically when you supply your own `CancelToken` or a `tag`, since cancelling one caller must not cancel the other, when you pass a progress callback, which only one caller's request could drive, and when you pass your own `receiveTimeout` or `sendTimeout`, since one caller's deadline must not apply to another.
 
 De-duplication only collapses overlapping calls: sequential requests each hit the network. The package does not cache responses — if you need offline data, store it in your own persistence layer.
 
@@ -970,12 +974,12 @@ ApiServices.init(ApiConfig(
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `enabled` | `true` | Master switch. `ApiLogOptions.disabled()` turns everything off. |
+| `enabled` | `true` | Master switch. `ApiLogOptions.disabled()` turns the logger off; the `redact*` fields still mask what the observer receives. |
 | `request` | `true` | Log the request line. |
 | `requestHeader` | `false` | Log request headers (secrets masked — see [Redaction](#redaction)). |
 | `requestBody` | `true` | Log the request body. |
 | `responseHeader` | `false` | Log response headers. |
-| `responseBody` | `true` | Log the response body. |
+| `responseBody` | `true` | Log the response body. A binary one (`ResponseType.bytes`) prints as `<48213 bytes, image/png>`. |
 | `error` | `true` | Log errors. |
 | `maxWidth` | `90` | Wrap width. |
 | `compact` | `true` | Compact JSON output. |
@@ -1035,7 +1039,7 @@ ApiServices.init(const ApiConfig(
 ```
 
 ```
-║      "caseNo": "FIR-2026-000148-ISB",
+║      "orderNo": "ORD-2026-000148",
 ║      "data": iVBORw0KGgoAAAANSUhEUg…
 ║      …[412903 base64 chars elided]
 ║      "capturedAt": "2026-08-13T09:14:22Z"
@@ -1141,7 +1145,7 @@ Every field on `ApiConfig`:
 | `isSuccess` | `null` | Reject a `2xx` whose body says otherwise. |
 | `onRejected` | `null` | Builds the `Failure` for a response `isSuccess` rejected. |
 | `mapFailure` | `null` | Rewrites any `Failure` before the caller sees it. |
-| `httpClientAdapter` | `null` | Replaces the transport. Mutually exclusive with `pinning`. |
+| `httpClientAdapter` | `null` | Replaces the transport. Mutually exclusive with `pinning` and `proxy`. |
 | `pinning` | `null` | Certificate pinning by CA, per host. Ignored on web. |
 | `proxy` | `null` | Send selected hosts through an HTTP proxy, the rest direct. Ignored on web. |
 | `observer` | `null` | Request/response/failure hook. |

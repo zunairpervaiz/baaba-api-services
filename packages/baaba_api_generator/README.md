@@ -16,11 +16,11 @@ Instead of a hand-written wrapper per endpoint, you keep `KEY=value` lines in `e
 
 ```yaml
 dependencies:
-  baaba_api_handler: ^5.0.0
+  baaba_api_handler: ^5.0.1
 
 dev_dependencies:
   build_runner: ^2.4.0
-  baaba_api_generator: ^1.0.0
+  baaba_api_generator: ^1.0.1
 ```
 
 The generator needs Dart 3.11 or newer to run (it is only used at build time). The code it writes runs on whatever `baaba_api_handler` supports.
@@ -134,7 +134,7 @@ ApiServices.init(ApiConfig(
 ));
 ```
 
-- A field reads the key named by `@BaabaApiField(name: ...)`, or else its name in UPPER_SNAKE case (`baseUrl` → `BASE_URL`), or else its name as written.
+- A field reads the key named by `@BaabaApiField(name: ...)`, or else its name in UPPER_SNAKE case (`baseUrl` → `BASE_URL`; a digit stays with its word, so `s3Bucket` → `S3_BUCKET` and `apiV2Url` → `API_V2_URL`), or else its name as written.
 - Types: `String`, `int`, `bool` (`true`/`false`, any case), `Uri`. Each value is parsed **when you build**; one that does not parse fails the build, naming the key and line, rather than failing the app at runtime.
 - Empty values: a `String` is `''`; a nullable field (`String?`, `int?`, …) is `null`; a non-nullable `int`, `bool` or `Uri` is a build error.
 - Write each field's type out: inferred from `_StageEnv.x`, it cannot be resolved while the part is being generated. `const` fields are skipped, so the class can keep helpers of its own.

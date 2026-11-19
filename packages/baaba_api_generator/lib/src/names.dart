@@ -51,20 +51,35 @@ String memberNameForKey(String key) {
 }
 
 /// The default `.env` key for a field: `baseUrl` → `BASE_URL`,
-/// `apiV2Url` → `API_V2_URL`.
-String keyForMemberName(String name) {
+/// `apiV2Url` → `API_V2_URL`, `s3Bucket` → `S3_BUCKET`, `baseURLPath` →
+/// `BASE_URL_PATH`. A digit stays with the word before it.
+String keyForMemberName(String name) => _upperSnake(name, legacy: false);
+
+/// The keys a field without `@BaabaApiField` reads, in order: its
+/// [keyForMemberName], then 1.0.0's spelling (which split a digit off a
+/// lower-case letter, `s3Bucket` → `S_3_BUCKET`), then its name as written.
+List<String> keysForMemberName(String name) =>
+    {keyForMemberName(name), _upperSnake(name, legacy: true), name}.toList();
+
+bool _isUpper(String c) => c.toUpperCase() == c && c.toLowerCase() != c;
+bool _isLower(String c) => c.toLowerCase() == c && c.toUpperCase() != c;
+bool _isDigit(String c) => '0123456789'.contains(c);
+
+String _upperSnake(String name, {required bool legacy}) {
   final buffer = StringBuffer();
   for (var i = 0; i < name.length; i++) {
     final c = name[i];
-    final upper = c.toUpperCase() == c && c.toLowerCase() != c;
-    final digit = RegExp(r'[0-9]').hasMatch(c);
-    if (i > 0 && (upper || digit)) {
+    if (i > 0) {
       final previous = name[i - 1];
-      final previousIsLower =
-          previous.toLowerCase() == previous &&
-          previous.toUpperCase() != previous;
-      final previousIsDigit = RegExp(r'[0-9]').hasMatch(previous);
-      if (previousIsLower || (upper && previousIsDigit)) buffer.write('_');
+      final next = i + 1 < name.length ? name[i + 1] : '';
+      final boundary = legacy
+          ? (_isUpper(c) || _isDigit(c)) &&
+                (_isLower(previous) || (_isUpper(c) && _isDigit(previous)))
+          : _isUpper(c) &&
+                (_isLower(previous) ||
+                    _isDigit(previous) ||
+                    (_isUpper(previous) && next.isNotEmpty && _isLower(next)));
+      if (boundary) buffer.write('_');
     }
     buffer.write(c.toUpperCase());
   }
